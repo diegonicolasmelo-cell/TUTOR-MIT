@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<?!= incluir('Estilos'); ?>
+</head>
+<body>
+<div id="app">
+
+  <aside class="lateral">
+    <div class="marca">
+      <div class="marca-icono">🫀</div>
+      <div>
+        <div class="marca-txt">Tutor MIT</div>
+        <div class="marca-sub">Cardiovascular</div>
+      </div>
+    </div>
+    <nav id="nav-lateral"></nav>
+    <div class="lateral-pie">
+      <div class="sm tenue" style="padding:0 10px">Comprender → relacionar → recordar</div>
+    </div>
+  </aside>
+
+  <main class="principal">
+    <header class="barra-sup">
+      <div>
+        <h1 id="titulo-vista">Cargando…</h1>
+        <div class="sub" id="sub-vista"></div>
+      </div>
+      <div class="barra-acciones" id="acciones-vista"></div>
+    </header>
+    <div class="contenido" id="contenido">
+      <div class="vacio"><span class="emoji">🫀</span>Preparando tu tutor…</div>
+    </div>
+  </main>
+
+</div>
+
+<nav class="menu-movil" id="menu-movil"></nav>
+<div class="brindis" id="brindis"></div>
+<?!= incluir('Datos'); ?>
+<?!= incluir('App'); ?>
+</body>
+</html>

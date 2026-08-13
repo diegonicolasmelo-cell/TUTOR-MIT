@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Tutor de fisiología y fisiopatología cardiovascular con metodología MIT: comprensión por mecanismos, técnica Feynman, recuperación activa y repetición espaciada.">
+  <title>Tutor MIT · Cardiovascular</title>
+  <base target="_top">
+  <link rel="stylesheet" href="assets/estilos.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================= Barra lateral ================= -->
+  <aside class="lateral">
+    <div class="marca">
+      <div class="marca-icono">🫀</div>
+      <div>
+        <div class="marca-txt">Tutor MIT</div>
+        <div class="marca-sub">Cardiovascular</div>
+      </div>
+    </div>
+    <nav id="nav-lateral"></nav>
+    <div class="lateral-pie">
+      <div class="sm tenue" style="padding:0 10px">
+        Comprender → relacionar → recordar
+      </div>
+    </div>
+  </aside>
+
+  <!-- ================= Contenido ================= -->
+  <main class="principal">
+    <header class="barra-sup">
+      <div>
+        <h1 id="titulo-vista">Cargando…</h1>
+        <div class="sub" id="sub-vista"></div>
+      </div>
+      <div class="barra-acciones" id="acciones-vista"></div>
+    </header>
+    <div class="contenido" id="contenido">
+      <div class="vacio" id="cargando"><span class="emoji">🫀</span>Preparando tu tutor…</div>
+    </div>
+  </main>
+
+</div>
+
+<!-- ================= Navegación móvil ================= -->
+<nav class="menu-movil" id="menu-movil"></nav>
+
+<div class="brindis" id="brindis"></div>
+
+<!-- Datos del temario -->
+<script src="assets/datos-nucleo.js"></script>
+<script src="assets/datos-hemodinamia.js"></script>
+<script src="assets/datos-electro.js"></script>
+<script src="assets/datos-regulacion.js"></script>
+<script src="assets/datos-fisiopato.js"></script>
+
+<!-- Lógica -->
+<script src="assets/almacen.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/vistas.js"></script>
+<script src="assets/estudio.js"></script>
+<script src="assets/tarjetas.js"></script>
+<script src="assets/app.js"></script>
+
+</body>
+</html>

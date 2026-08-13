@@ -1,0 +1,2275 @@
+<script>
+/* ============================================================
+   ALMACÉN — capa de persistencia intercambiable
+   ------------------------------------------------------------
+   ÚNICO punto del código que toca el almacenamiento.
+   - En navegador (mockup): localStorage.
+   - En Apps Script: google.script.run → PropertiesService.
+   Toda la API es asíncrona (promesas) para que la migración
+   no exija cambiar ninguna vista.
+   ============================================================ */
+
+var Almacen = (function () {
+  var CLAVE = 'tutor-mit-cardio-v1';
+
+  var enAppsScript = (typeof google !== 'undefined' &&
+    typeof google.script !== 'undefined' &&
+    typeof google.script.run !== 'undefined');
+
+  function estadoInicial() {
+    return {
+      version: 1,
+      creado: new Date().toISOString(),
+      ajustes: JSON.parse(JSON.stringify(TUTOR.AJUSTES_DEFECTO)),
+      temas: {},
+      tarjetas: {},
+      sesiones: [],
+      plan: {},
+      brechas: [],
+      racha: { ultimoDia: null, dias: 0, mejor: 0 }
+    };
+  }
+
+  function fusionar(guardado) {
+    var base = estadoInicial();
+    if (!guardado) return base;
+    Object.keys(base).forEach(function (k) {
+      if (guardado[k] === undefined) guardado[k] = base[k];
+    });
+    Object.keys(base.ajustes).forEach(function (k) {
+      if (guardado.ajustes[k] === undefined) guardado.ajustes[k] = base.ajustes[k];
+    });
+    return guardado;
+  }
+
+  function leerLocal() {
+    try {
+      var crudo = window.localStorage.getItem(CLAVE);
+      return crudo ? JSON.parse(crudo) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function escribirLocal(estado) {
+    try {
+      window.localStorage.setItem(CLAVE, JSON.stringify(estado));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  return {
+    modo: enAppsScript ? 'appsscript' : 'local',
+
+    /* Devuelve una promesa con el estado completo. */
+    cargar: function () {
+      return new Promise(function (resolver) {
+        if (enAppsScript) {
+          google.script.run
+            .withSuccessHandler(function (json) {
+              resolver(fusionar(json ? JSON.parse(json) : null));
+            })
+            .withFailureHandler(function () { resolver(estadoInicial()); })
+            .leerEstado();
+        } else {
+          resolver(fusionar(leerLocal()));
+        }
+      });
+    },
+
+    /* Persiste el estado. Devuelve promesa. */
+    guardar: function (estado) {
+      return new Promise(function (resolver) {
+        if (enAppsScript) {
+          google.script.run
+            .withSuccessHandler(function () { resolver(true); })
+            .withFailureHandler(function () { resolver(false); })
+            .guardarEstado(JSON.stringify(estado));
+        } else {
+          resolver(escribirLocal(estado));
+        }
+      });
+    },
+
+    reiniciar: function () {
+      return this.guardar(estadoInicial());
+    },
+
+    inicial: estadoInicial
+  };
+})();
+
+
+/* ============================================================
+   ESTADO — modelo en memoria y reglas de negocio
+   ============================================================ */
+
+var Estado = (function () {
+  var d = null;                 // datos
+  var oyentes = [];
+  var guardadoPendiente = null;
+
+  function hoyISO(desplazamiento) {
+    var f = new Date();
+    if (desplazamiento) f.setDate(f.getDate() + desplazamiento);
+    return f.toISOString().slice(0, 10);
+  }
+
+  function diasEntre(a, b) {
+    return Math.round((new Date(b) - new Date(a)) / 86400000);
+  }
+
+  function notificar() {
+    oyentes.forEach(function (fn) { fn(d); });
+  }
+
+  /* Guardado diferido para no escribir en cada tecla. */
+  function persistir() {
+    if (guardadoPendiente) clearTimeout(guardadoPendiente);
+    guardadoPendiente = setTimeout(function () {
+      Almacen.guardar(d);
+    }, 400);
+  }
+
+  function temaEstado(id) {
+    if (!d.temas[id]) {
+      d.temas[id] = {
+        dominio: 0, vistas: 0, minutos: 0, ultimo: null,
+        aciertos: 0, intentos: 0, feynman: 0, casos: 0
+      };
+    }
+    return d.temas[id];
+  }
+
+  function tarjetaEstado(id) {
+    if (!d.tarjetas[id]) {
+      d.tarjetas[id] = {
+        facilidad: TUTOR.SRS.facilidadInicial,
+        intervalo: 0,
+        repeticiones: 0,
+        lapsos: 0,
+        vence: hoyISO(),
+        ultimo: null,
+        nueva: true
+      };
+    }
+    return d.tarjetas[id];
+  }
+
+  return {
+    /* ---------- ciclo de vida ---------- */
+    iniciar: function () {
+      return Almacen.cargar().then(function (cargado) {
+        d = cargado;
+        Estado.registrarDia();
+        return d;
+      });
+    },
+
+    datos: function () { return d; },
+    ajustes: function () { return d.ajustes; },
+    suscribir: function (fn) { oyentes.push(fn); },
+    guardar: persistir,
+
+    guardarAjustes: function (parciales) {
+      Object.keys(parciales).forEach(function (k) { d.ajustes[k] = parciales[k]; });
+      persistir();
+      notificar();
+    },
+
+    /* ---------- racha ---------- */
+    registrarDia: function () {
+      var hoy = hoyISO();
+      var r = d.racha;
+      if (r.ultimoDia === hoy) return;
+      if (r.ultimoDia === hoyISO(-1)) r.dias += 1;
+      else if (r.ultimoDia !== null) r.dias = 1;
+      else r.dias = 1;
+      r.ultimoDia = hoy;
+      if (r.dias > (r.mejor || 0)) r.mejor = r.dias;
+      persistir();
+    },
+
+    /* ---------- temas ---------- */
+    tema: temaEstado,
+
+    dominio: function (id) {
+      return d.temas[id] ? Math.round(d.temas[id].dominio) : 0;
+    },
+
+    /* El dominio combina precisión en preguntas, exposición y
+       frescura: decae con el tiempo si no se repasa. */
+    recalcularDominio: function (id) {
+      var t = temaEstado(id);
+      var precision = t.intentos > 0 ? (t.aciertos / t.intentos) : 0;
+      var exposicion = Math.min(1, t.vistas / 3);
+      var profundidad = Math.min(1, (t.feynman * 0.6 + t.casos * 0.4) / 2);
+      var bruto = (precision * 55) + (exposicion * 25) + (profundidad * 20);
+
+      // Decaimiento por olvido: −1,5 puntos por día sin repasar (tope 30).
+      if (t.ultimo) {
+        var dias = diasEntre(t.ultimo, hoyISO());
+        bruto -= Math.min(30, Math.max(0, dias - 2) * 1.5);
+      }
+      t.dominio = Math.max(0, Math.min(100, bruto));
+      return t.dominio;
+    },
+
+    dominioModulo: function (idModulo) {
+      var temas = TUTOR.temasDe(idModulo);
+      if (!temas.length) return 0;
+      var suma = 0;
+      temas.forEach(function (t) { suma += Estado.dominio(t.id); });
+      return Math.round(suma / temas.length);
+    },
+
+    dominioGlobal: function () {
+      if (!TUTOR.TEMAS.length) return 0;
+      var suma = 0;
+      TUTOR.TEMAS.forEach(function (t) { suma += Estado.dominio(t.id); });
+      return Math.round(suma / TUTOR.TEMAS.length);
+    },
+
+    registrarRespuesta: function (idTema, acierto) {
+      var t = temaEstado(idTema);
+      t.intentos += 1;
+      if (acierto) t.aciertos += 1;
+      t.ultimo = hoyISO();
+      Estado.recalcularDominio(idTema);
+      persistir();
+    },
+
+    registrarFase: function (idTema, fase) {
+      var t = temaEstado(idTema);
+      if (fase === 'feynman') t.feynman += 1;
+      if (fase === 'caso') t.casos += 1;
+      t.ultimo = hoyISO();
+      Estado.recalcularDominio(idTema);
+      persistir();
+    },
+
+    /* ---------- sesiones ---------- */
+    cerrarSesion: function (resumen) {
+      var t = temaEstado(resumen.tema);
+      t.vistas += 1;
+      t.minutos += resumen.minutos;
+      t.ultimo = hoyISO();
+      Estado.recalcularDominio(resumen.tema);
+      resumen.fecha = new Date().toISOString();
+      d.sesiones.unshift(resumen);
+      if (d.sesiones.length > 300) d.sesiones.length = 300;
+      Estado.registrarDia();
+      Estado.marcarPlanHecho(resumen.tema);
+      persistir();
+      notificar();
+    },
+
+    sesionesDe: function (fechaISO) {
+      return d.sesiones.filter(function (s) {
+        return s.fecha && s.fecha.slice(0, 10) === fechaISO;
+      });
+    },
+
+    minutosDe: function (fechaISO) {
+      return Estado.sesionesDe(fechaISO).reduce(function (a, s) {
+        return a + (s.minutos || 0);
+      }, 0);
+    },
+
+    /* ---------- brechas conceptuales ---------- */
+    anotarBrecha: function (idTema, texto) {
+      d.brechas.unshift({
+        tema: idTema, texto: texto,
+        fecha: new Date().toISOString(), resuelta: false
+      });
+      if (d.brechas.length > 120) d.brechas.length = 120;
+      persistir();
+    },
+
+    resolverBrecha: function (indice) {
+      if (d.brechas[indice]) d.brechas[indice].resuelta = true;
+      persistir();
+      notificar();
+    },
+
+    brechasAbiertas: function () {
+      return d.brechas.filter(function (b) { return !b.resuelta; });
+    },
+
+    /* ---------- tarjetas (SM-2 adaptado) ---------- */
+    tarjeta: tarjetaEstado,
+
+    tarjetasVencidas: function () {
+      var hoy = hoyISO();
+      var todas = TUTOR.todasLasTarjetas();
+      var vencidas = [], nuevas = [];
+      todas.forEach(function (c) {
+        var e = d.tarjetas[c.id];
+        if (!e) { nuevas.push(c); return; }
+        if (e.vence <= hoy) vencidas.push(c);
+      });
+      var maxNuevas = d.ajustes.tarjetasNuevasDia;
+      var limite = d.ajustes.maxTarjetasDia;
+      var lote = vencidas.concat(nuevas.slice(0, maxNuevas));
+      return lote.slice(0, limite);
+    },
+
+    tarjetasDeTema: function (idTema) {
+      return TUTOR.todasLasTarjetas().filter(function (c) {
+        return c.tema === idTema;
+      });
+    },
+
+    /* grado: 1 = otra vez, 2 = difícil, 3 = bien, 4 = fácil */
+    calificarTarjeta: function (idTarjeta, grado) {
+      var s = TUTOR.SRS;
+      var e = tarjetaEstado(idTarjeta);
+      e.nueva = false;
+      e.ultimo = hoyISO();
+
+      if (grado === 1) {
+        e.repeticiones = 0;
+        e.lapsos += 1;
+        e.intervalo = 0;
+        e.facilidad = Math.max(s.facilidadMinima, e.facilidad - s.penalizacionFallo);
+        e.vence = hoyISO();           // vuelve a aparecer hoy
+      } else {
+        e.repeticiones += 1;
+        if (e.repeticiones === 1) e.intervalo = s.primerIntervalo;
+        else if (e.repeticiones === 2) e.intervalo = s.segundoIntervalo;
+        else {
+          var mult = e.facilidad;
+          if (grado === 2) mult = s.multiplicadorDificil;
+          if (grado === 4) mult = e.facilidad * s.multiplicadorFacil;
+          e.intervalo = Math.round(e.intervalo * mult);
+        }
+        if (grado === 2) e.facilidad = Math.max(s.facilidadMinima, e.facilidad - 0.15);
+        if (grado === 4) e.facilidad = e.facilidad + 0.1;
+        e.intervalo = Math.min(s.intervaloMaximo, Math.max(1, e.intervalo));
+        e.vence = hoyISO(e.intervalo);
+      }
+      persistir();
+      return e;
+    },
+
+    estadisticasTarjetas: function () {
+      var todas = TUTOR.todasLasTarjetas();
+      var hoy = hoyISO();
+      var r = { total: todas.length, nuevas: 0, aprendiendo: 0, maduras: 0, vencenHoy: 0 };
+      todas.forEach(function (c) {
+        var e = d.tarjetas[c.id];
+        if (!e) { r.nuevas += 1; return; }
+        if (e.intervalo >= 21) r.maduras += 1; else r.aprendiendo += 1;
+        if (e.vence <= hoy) r.vencenHoy += 1;
+      });
+      r.vencenHoy += Math.min(r.nuevas, d.ajustes.tarjetasNuevasDia);
+      return r;
+    },
+
+    /* ---------- planificador ---------- */
+    minutosDisponibles: function (fechaISO) {
+      var dia = new Date(fechaISO + 'T12:00:00').getDay();
+      return d.ajustes.minutosPorDia[dia] || 0;
+    },
+
+    plan: function () { return d.plan; },
+
+    planDe: function (fechaISO) { return d.plan[fechaISO] || []; },
+
+    marcarPlanHecho: function (idTema) {
+      var hoy = hoyISO();
+      (d.plan[hoy] || []).forEach(function (b) {
+        if (b.tema === idTema && !b.hecho) b.hecho = true;
+      });
+    },
+
+    /* Genera un plan de N días equilibrando temas nuevos,
+       repasos vencidos y prioridad de alto rendimiento. */
+    generarPlan: function (dias) {
+      dias = dias || 14;
+      var plan = {};
+      var pendientes = TUTOR.TEMAS.slice().sort(function (a, b) {
+        var da = Estado.dominio(a.id), db = Estado.dominio(b.id);
+        if (a.alto !== b.alto) return a.alto ? -1 : 1;   // alto rendimiento primero
+        return da - db;                                   // menor dominio primero
+      });
+
+      var cola = pendientes.slice();
+      for (var i = 0; i < dias; i++) {
+        var fecha = hoyISO(i);
+        var disponibles = Estado.minutosDisponibles(fecha);
+        if (disponibles <= 0) { plan[fecha] = []; continue; }
+
+        var bloques = [];
+        var restantes = disponibles;
+
+        // Reserva fija para repaso espaciado si hay mazo activo.
+        var stats = Estado.estadisticasTarjetas();
+        if (stats.vencenHoy > 0 || i > 0) {
+          var minRepaso = Math.min(10, Math.round(disponibles * 0.3));
+          bloques.push({ tipo: 'repaso', tema: null, minutos: minRepaso, hecho: false });
+          restantes -= minRepaso;
+        }
+
+        // Bloques de estudio con el tiempo restante.
+        while (restantes >= 12 && cola.length) {
+          var tema = cola.shift();
+          var min = Math.min(restantes, tema.minutos || 20);
+          bloques.push({ tipo: 'estudio', tema: tema.id, minutos: min, hecho: false });
+          restantes -= min;
+          if (cola.length === 0) cola = pendientes.slice();  // segunda vuelta = consolidación
+        }
+        plan[fecha] = bloques;
+      }
+      d.plan = plan;
+      persistir();
+      notificar();
+      return plan;
+    },
+
+    /* Sugerencia de la próxima sesión según tiempo disponible hoy. */
+    sugerencia: function () {
+      var hoy = hoyISO();
+      var bloques = Estado.planDe(hoy).filter(function (b) {
+        return !b.hecho && b.tipo === 'estudio';
+      });
+      if (bloques.length) {
+        return { tema: bloques[0].tema, minutos: bloques[0].minutos, origen: 'plan' };
+      }
+      var candidatos = TUTOR.TEMAS.slice().sort(function (a, b) {
+        if (a.alto !== b.alto) return a.alto ? -1 : 1;
+        return Estado.dominio(a.id) - Estado.dominio(b.id);
+      });
+      return {
+        tema: candidatos[0].id,
+        minutos: Math.min(Estado.minutosDisponibles(hoy) || 25, 30),
+        origen: 'sugerido'
+      };
+    },
+
+    /* ---------- utilidades expuestas ---------- */
+    hoyISO: hoyISO,
+    diasEntre: diasEntre,
+
+    exportar: function () { return JSON.stringify(d, null, 2); },
+
+    importar: function (json) {
+      try {
+        var nuevo = JSON.parse(json);
+        if (!nuevo || typeof nuevo !== 'object') return false;
+        d = nuevo;
+        persistir();
+        notificar();
+        return true;
+      } catch (e) { return false; }
+    },
+
+    reiniciar: function () {
+      d = Almacen.inicial();
+      persistir();
+      notificar();
+    }
+  };
+})();
+
+
+/* ============================================================
+   UI — utilidades, enrutador y armazón de la aplicación
+   Sin dependencias externas: compatible con HtmlService.
+   ============================================================ */
+
+var UI = (function () {
+  var acciones = {};   // registro de manejadores por data-accion
+
+  function esc(s) {
+    return String(s === undefined || s === null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function $(sel, raiz) { return (raiz || document).querySelector(sel); }
+  function $$(sel, raiz) {
+    return Array.prototype.slice.call((raiz || document).querySelectorAll(sel));
+  }
+
+  function brindis(mensaje) {
+    var el = $('#brindis');
+    el.textContent = mensaje;
+    el.classList.add('ver');
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.classList.remove('ver'); }, 2200);
+  }
+
+  function modal(html) {
+    cerrarModal();
+    var velo = document.createElement('div');
+    velo.className = 'velo';
+    velo.id = 'velo';
+    velo.innerHTML = '<div class="modal">' + html + '</div>';
+    velo.addEventListener('click', function (e) {
+      if (e.target === velo) cerrarModal();
+    });
+    document.body.appendChild(velo);
+  }
+
+  function cerrarModal() {
+    var v = $('#velo');
+    if (v) v.remove();
+  }
+
+  function barra(valor, clase) {
+    return '<div class="barra-progreso ' + (clase || '') + '">' +
+      '<i style="width:' + Math.max(0, Math.min(100, valor)) + '%"></i></div>';
+  }
+
+  function flecha(direccion) {
+    if (direccion === 'up') return '<span class="dir up">↑</span>';
+    if (direccion === 'down') return '<span class="dir down">↓</span>';
+    return '<span class="dir eq">=</span>';
+  }
+
+  function variables(lista) {
+    if (!lista || !lista.length) return '';
+    return '<div class="variables">' + lista.map(function (v) {
+      return '<span class="var-chip" title="' + esc(v.nota || '') + '">' +
+        flecha(v.d) + esc(v.n) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function cadena(pasos) {
+    if (!pasos || !pasos.length) return '';
+    return '<div class="cadena">' + pasos.map(function (p, i) {
+      var sep = i < pasos.length - 1 ? '<span class="flecha">→</span>' : '';
+      var clase = i === pasos.length - 1 ? 'paso destacado' : 'paso';
+      return '<span class="' + clase + '">' + esc(p) + '</span>' + sep;
+    }).join('') + '</div>';
+  }
+
+  function esquema(nodos) {
+    if (!nodos || !nodos.length) return '';
+    return '<div class="esquema">' + nodos.map(function (n, i) {
+      var f = i < nodos.length - 1 ? '<span class="baja-flecha">↓</span>' : '';
+      return '<div class="nodo">' + esc(n) + '</div>' + f;
+    }).join('') + '</div>';
+  }
+
+  function etiquetaDominio(valor) {
+    var n = TUTOR.nivelDominio(valor);
+    return '<span class="etiq ' + n.clase + '">' + n.etiqueta + ' · ' + valor + '%</span>';
+  }
+
+  function minutosTexto(m) {
+    if (m < 60) return m + ' min';
+    var h = Math.floor(m / 60), r = m % 60;
+    return h + ' h' + (r ? ' ' + r + ' min' : '');
+  }
+
+  function fechaCorta(iso) {
+    var f = new Date(iso + (iso.length === 10 ? 'T12:00:00' : ''));
+    return f.toLocaleDateString('es', { day: 'numeric', month: 'short' });
+  }
+
+  function nombreDia(iso) {
+    var f = new Date(iso + 'T12:00:00');
+    return ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'][f.getDay()];
+  }
+
+  /* ---------------- acciones delegadas ---------------- */
+  function accion(nombre, fn) { acciones[nombre] = fn; }
+
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-accion]');
+    if (!el) return;
+    var fn = acciones[el.getAttribute('data-accion')];
+    if (fn) {
+      e.preventDefault();
+      fn(el.dataset, el, e);
+    }
+  });
+
+  /* ---------------- enrutador ---------------- */
+  var rutas = {};
+  var rutaActual = null;
+  var parametros = {};
+
+  function registrar(id, def) { rutas[id] = def; }
+
+  function ir(id, params) {
+    if (!rutas[id]) id = 'inicio';
+    rutaActual = id;
+    parametros = params || {};
+    pintar();
+    window.scrollTo(0, 0);
+  }
+
+  function pintar() {
+    var r = rutas[rutaActual];
+    if (!r) return;
+    var titulo = typeof r.titulo === 'function' ? r.titulo(parametros) : r.titulo;
+    var sub = typeof r.sub === 'function' ? r.sub(parametros) : (r.sub || '');
+    var acc = r.acciones ? r.acciones(parametros) : '';
+
+    $('#titulo-vista').innerHTML = esc(titulo);
+    $('#sub-vista').innerHTML = sub;
+    $('#acciones-vista').innerHTML = acc;
+    $('#contenido').className = 'contenido' + (r.angosto ? ' angosto' : '');
+    $('#contenido').innerHTML = r.render(parametros);
+
+    if (r.despues) r.despues(parametros);
+    marcarNavegacion();
+  }
+
+  function refrescar() { pintar(); }
+
+  function marcarNavegacion() {
+    $$('.nav-item').forEach(function (b) {
+      b.classList.toggle('activo', b.dataset.ruta === rutaActual);
+    });
+    $$('.menu-movil button').forEach(function (b) {
+      b.classList.toggle('activo', b.dataset.ruta === rutaActual);
+    });
+  }
+
+  function actualizarGlobos() {
+    var pendientes = Estado.estadisticasTarjetas().vencenHoy;
+    $$('[data-globo="tarjetas"]').forEach(function (el) {
+      el.innerHTML = pendientes ? '<span class="globo">' + pendientes + '</span>' : '';
+    });
+  }
+
+  /* ---------------- tema claro/oscuro ----------------
+     'auto' retira el atributo para que decidan el anfitrión
+     (data-theme) o la preferencia del sistema. */
+  function aplicarTema(tema) {
+    if (tema === 'auto' || !tema) document.documentElement.removeAttribute('data-tema');
+    else document.documentElement.setAttribute('data-tema', tema);
+  }
+
+  return {
+    esc: esc, $: $, $$: $$,
+    brindis: brindis, modal: modal, cerrarModal: cerrarModal,
+    barra: barra, variables: variables, cadena: cadena, esquema: esquema,
+    etiquetaDominio: etiquetaDominio, minutosTexto: minutosTexto,
+    fechaCorta: fechaCorta, nombreDia: nombreDia,
+    accion: accion, registrar: registrar, ir: ir, refrescar: refrescar,
+    actualizarGlobos: actualizarGlobos, aplicarTema: aplicarTema,
+    rutaActual: function () { return rutaActual; }
+  };
+})();
+
+
+/* ============================================================
+   Cronómetro reutilizable para las sesiones
+   ============================================================ */
+
+var Crono = (function () {
+  var intervalo = null;
+  var restanteSeg = 0;
+  var alCambiar = null;
+  var alTerminar = null;
+  var pausado = false;
+
+  function formatear(seg) {
+    var m = Math.floor(Math.abs(seg) / 60), s = Math.abs(seg) % 60;
+    return (seg < 0 ? '−' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function tic() {
+    if (pausado) return;
+    restanteSeg -= 1;
+    if (alCambiar) alCambiar(restanteSeg, formatear(restanteSeg));
+    if (restanteSeg === 0 && alTerminar) alTerminar();
+  }
+
+  return {
+    iniciar: function (minutos, cambio, fin) {
+      Crono.parar();
+      restanteSeg = Math.round(minutos * 60);
+      alCambiar = cambio; alTerminar = fin; pausado = false;
+      if (alCambiar) alCambiar(restanteSeg, formatear(restanteSeg));
+      intervalo = setInterval(tic, 1000);
+    },
+    alternarPausa: function () {
+      pausado = !pausado;
+      return pausado;
+    },
+    estaPausado: function () { return pausado; },
+    parar: function () {
+      if (intervalo) clearInterval(intervalo);
+      intervalo = null;
+    },
+    transcurridoMin: function (totalMin) {
+      return Math.max(0, Math.round(totalMin - restanteSeg / 60));
+    },
+    formatear: formatear,
+    restante: function () { return restanteSeg; }
+  };
+})();
+
+
+/* ============================================================
+   VISTAS — Inicio, Temario, Plan, Rendimiento, Prompt, Ajustes
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   INICIO
+   ------------------------------------------------------------ */
+UI.registrar('inicio', {
+  titulo: function () {
+    var h = new Date().getHours();
+    var saludo = h < 6 ? 'Buenas noches' : h < 13 ? 'Buenos días' : h < 21 ? 'Buenas tardes' : 'Buenas noches';
+    return saludo + ', ' + Estado.ajustes().nombre;
+  },
+  sub: function () {
+    var s = Estado.sugerencia();
+    var t = TUTOR.tema(s.tema);
+    return 'Siguiente paso sugerido: <b>' + UI.esc(t.nombre) + '</b> · ' + s.minutos + ' min';
+  },
+  acciones: function () {
+    return '<button class="btn btn-primario" data-accion="empezar-sugerido">▶ Empezar sesión</button>';
+  },
+
+  render: function () {
+    var hoy = Estado.hoyISO();
+    var stats = Estado.estadisticasTarjetas();
+    var minHoy = Estado.minutosDe(hoy);
+    var objetivo = Estado.minutosDisponibles(hoy) || Estado.ajustes().objetivoDiario;
+    var global = Estado.dominioGlobal();
+    var racha = Estado.datos().racha;
+    var brechas = Estado.brechasAbiertas();
+    var s = Estado.sugerencia();
+    var temaSug = TUTOR.tema(s.tema);
+
+    var html = '';
+
+    /* --- métricas superiores --- */
+    html += '<div class="rejilla c4">' +
+      tarjetaMetrica('Estudio de hoy', minHoy + '<span class="tenue" style="font-size:1rem"> / ' + objetivo + ' min</span>',
+        UI.barra(objetivo ? (minHoy / objetivo) * 100 : 0, minHoy >= objetivo ? 'ok' : '')) +
+      tarjetaMetrica('Tarjetas pendientes', stats.vencenHoy,
+        '<span class="nota">' + stats.maduras + ' maduras · ' + stats.nuevas + ' nuevas</span>') +
+      tarjetaMetrica('Dominio global', global + '%',
+        UI.barra(global, global >= 70 ? 'ok' : global >= 40 ? 'alerta' : 'acento')) +
+      tarjetaMetrica('Racha', racha.dias + (racha.dias === 1 ? ' día' : ' días'),
+        '<span class="nota">Mejor: ' + (racha.mejor || racha.dias) + '</span>') +
+      '</div>';
+
+    /* --- bloque de arranque rápido --- */
+    html += '<div class="tarjeta mt">' +
+      '<div class="tarjeta-cab"><h2>¿Cuánto tiempo tienes ahora?</h2>' +
+      '<div class="der"><span class="etiq etiq-info">Método MIT</span></div></div>' +
+      '<p class="sm tenue">La sesión se dosifica sola: se recorta el contenido complementario y se preservan las fases de recuperación activa y razonamiento clínico.</p>' +
+      '<div class="opciones" style="margin-bottom:14px">' +
+      [10, 20, 30, 45, 60].map(function (m) {
+        return '<button class="opcion" data-accion="arranque-rapido" data-min="' + m + '">' +
+          m + ' min<small>' + descripcionTiempo(m) + '</small></button>';
+      }).join('') +
+      '</div>' +
+      '<div class="aviso"><b>Sugerido ahora:</b> ' + UI.esc(temaSug.nombre) +
+      (temaSug.alto ? ' <span class="etiq etiq-fuego">🔥 Alto rendimiento</span>' : '') +
+      ' — ' + (s.origen === 'plan' ? 'viene de tu plan de la semana' : 'menor dominio con mayor rentabilidad') + '.</div>' +
+      '</div>';
+
+    /* --- dos columnas --- */
+    html += '<div class="rejilla c2 mt">';
+
+    /* progreso por módulo */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Avance por módulo</h3>' +
+      '<div class="der"><button class="btn btn-s btn-fantasma" data-accion="ver-temario">Ver temario</button></div></div>';
+    TUTOR.MODULOS.forEach(function (m) {
+      var v = Estado.dominioModulo(m.id);
+      html += '<div class="fila"><div style="font-size:1.2rem">' + m.icono + '</div>' +
+        '<div class="crece"><div class="titulo">' + UI.esc(m.nombre) + '</div>' +
+        UI.barra(v, v >= 70 ? 'ok' : v >= 40 ? 'alerta' : 'acento') + '</div>' +
+        '<div class="sm tenue">' + v + '%</div></div>';
+    });
+    html += '</div>';
+
+    /* brechas detectadas */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Brechas detectadas</h3>' +
+      '<div class="der"><span class="etiq' + (brechas.length ? ' etiq-acento' : '') + '">' + brechas.length + '</span></div></div>';
+    if (!brechas.length) {
+      html += '<div class="vacio"><span class="emoji">🎯</span>Sin brechas abiertas.<br>' +
+        '<span class="sm">Aparecerán aquí cuando falles una pregunta o marques un punto no explicado en la fase Feynman.</span></div>';
+    } else {
+      html += '<ul class="lista-limpia">';
+      brechas.slice(0, 6).forEach(function (b, i) {
+        var t = TUTOR.tema(b.tema);
+        html += '<div class="fila"><div class="crece">' +
+          '<div class="titulo">' + UI.esc(b.texto) + '</div>' +
+          '<div class="sub">' + UI.esc(t ? t.nombre : '') + '</div></div>' +
+          '<button class="btn btn-s" data-accion="repasar-brecha" data-tema="' + b.tema + '">Repasar</button>' +
+          '<button class="btn btn-s btn-fantasma" data-accion="cerrar-brecha" data-i="' + i + '">✓</button></div>';
+      });
+      html += '</ul>';
+    }
+    html += '</div>';
+    html += '</div>';
+
+    /* --- actividad reciente --- */
+    var sesiones = Estado.datos().sesiones.slice(0, 5);
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Últimas sesiones</h3>' +
+      '<div class="der"><button class="btn btn-s btn-fantasma" data-accion="ver-rendimiento">Ver rendimiento</button></div></div>';
+    if (!sesiones.length) {
+      html += '<div class="vacio"><span class="emoji">📚</span>Todavía no hay sesiones registradas.<br>' +
+        '<span class="sm">Empieza por un bloque de 20 minutos: es suficiente para una fase completa del método.</span></div>';
+    } else {
+      sesiones.forEach(function (s) {
+        var t = TUTOR.tema(s.tema);
+        var pct = s.total ? Math.round((s.aciertos / s.total) * 100) : null;
+        html += '<div class="fila"><div class="crece">' +
+          '<div class="titulo">' + UI.esc(t ? t.nombre : s.tema) + '</div>' +
+          '<div class="sub">' + UI.fechaCorta(s.fecha.slice(0, 10)) + ' · ' + TUTOR.modo(s.modo).nombre +
+          ' · ' + s.minutos + ' min</div></div>' +
+          (pct !== null ? '<span class="etiq ' + (pct >= 70 ? 'etiq-ok' : 'etiq-alerta') + '">' + pct + '% acierto</span>' : '') +
+          '</div>';
+      });
+    }
+    html += '</div>';
+
+    return html;
+  }
+});
+
+function tarjetaMetrica(rotulo, valor, extra) {
+  return '<div class="tarjeta"><div class="metrica">' +
+    '<span class="rotulo">' + rotulo + '</span>' +
+    '<span class="valor">' + valor + '</span>' + (extra || '') + '</div></div>';
+}
+
+function descripcionTiempo(m) {
+  if (m <= 10) return 'Repaso rápido';
+  if (m <= 20) return 'Imprescindible';
+  if (m <= 30) return 'Comprender';
+  if (m <= 45) return 'Tutor intensivo';
+  return 'Profundización';
+}
+
+/* ------------------------------------------------------------
+   TEMARIO
+   ------------------------------------------------------------ */
+UI.registrar('temario', {
+  titulo: 'Temario',
+  sub: 'Fisiología y fisiopatología cardiovascular · ' + TUTOR.TEMAS.length + ' temas',
+  acciones: function () {
+    return '<button class="btn btn-s" data-accion="generar-plan">Regenerar plan</button>';
+  },
+  render: function () {
+    var html = '';
+    TUTOR.MODULOS.forEach(function (m) {
+      var temas = TUTOR.temasDe(m.id);
+      if (!temas.length) return;
+      var v = Estado.dominioModulo(m.id);
+      html += '<div class="tarjeta"><div class="tarjeta-cab">' +
+        '<div style="font-size:1.4rem">' + m.icono + '</div>' +
+        '<div><h2>' + UI.esc(m.nombre) + '</h2>' +
+        '<div class="sm tenue">' + UI.esc(m.resumen) + '</div></div>' +
+        '<div class="der">' + UI.etiquetaDominio(v) + '</div></div>';
+
+      temas.forEach(function (t) {
+        var d = Estado.dominio(t.id);
+        var est = Estado.tema(t.id);
+        html += '<div class="fila">' +
+          '<div class="crece">' +
+          '<div class="titulo">' + UI.esc(t.nombre) +
+          (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') + '</div>' +
+          '<div class="sub">' + t.minutos + ' min · ' +
+          (t.preguntas ? t.preguntas.length + ' preguntas · ' : '') +
+          (t.tarjetas ? t.tarjetas.length + ' tarjetas' : '') +
+          (est.vistas ? ' · estudiado ' + est.vistas + (est.vistas === 1 ? ' vez' : ' veces') : '') +
+          '</div>' +
+          UI.barra(d, d >= 70 ? 'ok' : d >= 40 ? 'alerta' : 'acento') +
+          '</div>' +
+          '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
+          '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
+          '</div>';
+      });
+      html += '</div>';
+    });
+    return html;
+  }
+});
+
+/* ------------------------------------------------------------
+   FICHA DE TEMA (consulta libre, sin sesión)
+   ------------------------------------------------------------ */
+UI.registrar('tema', {
+  titulo: function (p) { var t = TUTOR.tema(p.tema); return t ? t.nombre : 'Tema'; },
+  sub: function (p) {
+    var t = TUTOR.tema(p.tema);
+    if (!t) return '';
+    var m = TUTOR.modulo(t.modulo);
+    return UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
+  },
+  acciones: function (p) {
+    return '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
+      '<button class="btn btn-primario btn-s" data-accion="estudiar-tema" data-tema="' + p.tema + '">Estudiar con el método</button>';
+  },
+  angosto: true,
+  render: function (p) {
+    var t = TUTOR.tema(p.tema);
+    if (!t) return '<div class="vacio">Tema no encontrado.</div>';
+    var html = '';
+
+    html += '<div class="aviso aviso-acento"><b>Idea central.</b> ' + t.ideaCentral + '</div>';
+
+    html += '<div class="tarjeta mt"><div class="doc">';
+    t.bloques.forEach(function (b) {
+      html += '<div class="seccion-tema"><h3>' + UI.esc(b.titulo) +
+        ' <span class="etiq ' + (b.nivel === 'imprescindible' ? 'etiq-acento' : b.nivel === 'importante' ? 'etiq-info' : '') +
+        '">' + TUTOR.NIVELES[b.nivel].nombre + '</span></h3>' +
+        (b.html || '') + UI.cadena(b.cadena) + UI.esquema(b.esquema) + '</div>';
+    });
+    html += '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Variables clave</h3></div>' +
+      UI.variables(t.variables) + '</div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Fisiopatología</h3></div>' +
+      '<div class="doc">' + t.fisiopatologia + '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Correlación clínica</h3></div>' +
+      '<div class="doc">' + t.clinica + '</div></div>';
+
+    html += bloqueError(t.error);
+
+    html += '<div class="aviso aviso-ok mt"><b>Perla de examen.</b> ' + t.perla + '</div>';
+
+    return html;
+  }
+});
+
+function bloqueError(e) {
+  if (!e) return '';
+  return '<div class="tarjeta"><div class="tarjeta-cab"><h3>⚠️ Error frecuente</h3></div>' +
+    '<div class="doc">' +
+    '<p><b>Qué se confunde:</b> ' + e.confunde + '</p>' +
+    '<p><b>Por qué se parecen:</b> ' + e.parecido + '</p>' +
+    '<p><b>La diferencia real:</b> ' + e.diferencia + '</p>' +
+    '<p><b>Ejemplo clínico:</b> ' + e.ejemplo + '</p>' +
+    '<div class="aviso aviso-alerta"><b>Regla mental:</b> ' + e.regla + '</div>' +
+    '</div></div>';
+}
+
+/* ------------------------------------------------------------
+   PLAN SEMANAL
+   ------------------------------------------------------------ */
+UI.registrar('plan', {
+  titulo: 'Plan de estudio',
+  sub: 'Dosificado según tus minutos disponibles cada día',
+  acciones: function () {
+    return '<button class="btn btn-s" data-accion="editar-disponibilidad">Disponibilidad</button>' +
+      '<button class="btn btn-s btn-primario" data-accion="generar-plan">Regenerar</button>';
+  },
+  render: function () {
+    var plan = Estado.plan();
+    var claves = Object.keys(plan).sort();
+    if (!claves.length) {
+      return '<div class="tarjeta"><div class="vacio"><span class="emoji">🗓️</span>' +
+        'Todavía no has generado un plan.<br><span class="sm">El plan reparte los temas priorizando alto rendimiento y menor dominio, y reserva tiempo diario para el repaso espaciado.</span>' +
+        '<div class="mt"><button class="btn btn-primario" data-accion="generar-plan">Generar plan de 14 días</button></div></div></div>';
+    }
+
+    var hoy = Estado.hoyISO();
+    var html = '';
+    var totalMin = 0, totalBloques = 0, hechos = 0;
+    claves.forEach(function (f) {
+      plan[f].forEach(function (b) {
+        totalMin += b.minutos; totalBloques++; if (b.hecho) hechos++;
+      });
+    });
+
+    html += '<div class="rejilla c3">' +
+      tarjetaMetrica('Tiempo planificado', UI.minutosTexto(totalMin), '<span class="nota">próximos 14 días</span>') +
+      tarjetaMetrica('Bloques completados', hechos + ' / ' + totalBloques,
+        UI.barra(totalBloques ? (hechos / totalBloques) * 100 : 0, 'ok')) +
+      tarjetaMetrica('Media diaria', Math.round(totalMin / claves.length) + ' min',
+        '<span class="nota">ajustable en Disponibilidad</span>') +
+      '</div>';
+
+    // semanas de 7 días
+    for (var semana = 0; semana < Math.ceil(claves.length / 7); semana++) {
+      var dias = claves.slice(semana * 7, semana * 7 + 7);
+      html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>' +
+        (semana === 0 ? 'Esta semana' : 'Semana siguiente') + '</h3>' +
+        '<div class="der sm tenue">' + UI.fechaCorta(dias[0]) + ' – ' + UI.fechaCorta(dias[dias.length - 1]) + '</div></div>' +
+        '<div class="semana">';
+      dias.forEach(function (f) {
+        var bloques = plan[f];
+        var min = bloques.reduce(function (a, b) { return a + b.minutos; }, 0);
+        html += '<div class="dia' + (f === hoy ? ' hoy' : '') + '">' +
+          '<div class="cab"><span class="nombre">' + UI.nombreDia(f) + '</span>' +
+          '<span class="num">' + parseInt(f.slice(8), 10) + '</span>' +
+          '<span class="min">' + (min || '—') + (min ? "'" : '') + '</span></div>';
+        if (!bloques.length) {
+          html += '<div class="sm tenue">Descanso</div>';
+        } else {
+          bloques.forEach(function (b) {
+            if (b.tipo === 'repaso') {
+              html += '<div class="bloque-plan repaso' + (b.hecho ? ' hecho' : '') + '" data-accion="ir-tarjetas">' +
+                '🔁 Tarjetas · ' + b.minutos + "'" + '</div>';
+            } else {
+              var t = TUTOR.tema(b.tema);
+              html += '<div class="bloque-plan' + (b.hecho ? ' hecho' : '') + '" data-accion="estudiar-tema" data-tema="' + b.tema + '">' +
+                (t && t.alto ? '🔥 ' : '📘 ') + UI.esc(t ? t.nombre : b.tema) + ' · ' + b.minutos + "'" + '</div>';
+            }
+          });
+        }
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
+
+    html += '<div class="aviso mt"><b>Cómo se construye el plan.</b> Los temas de 🔥 alto rendimiento y los de menor dominio van primero; ' +
+      'cada día reserva un bloque de repaso espaciado, porque la retención depende más de la frecuencia de recuperación que del tiempo total invertido. ' +
+      'Al completar una sesión, el bloque correspondiente se marca automáticamente.</div>';
+
+    return html;
+  }
+});
+
+/* ------------------------------------------------------------
+   RENDIMIENTO
+   ------------------------------------------------------------ */
+UI.registrar('rendimiento', {
+  titulo: 'Rendimiento',
+  sub: 'Dónde estás sólido y dónde conviene volver',
+  render: function () {
+    var d = Estado.datos();
+    var sesiones = d.sesiones;
+    var totalMin = sesiones.reduce(function (a, s) { return a + (s.minutos || 0); }, 0);
+    var totalPreg = sesiones.reduce(function (a, s) { return a + (s.total || 0); }, 0);
+    var totalAcc = sesiones.reduce(function (a, s) { return a + (s.aciertos || 0); }, 0);
+    var precision = totalPreg ? Math.round((totalAcc / totalPreg) * 100) : 0;
+    var stats = Estado.estadisticasTarjetas();
+
+    var html = '<div class="rejilla c4">' +
+      tarjetaMetrica('Tiempo total', UI.minutosTexto(totalMin), '<span class="nota">' + sesiones.length + ' sesiones</span>') +
+      tarjetaMetrica('Precisión', precision + '%', UI.barra(precision, precision >= 70 ? 'ok' : 'alerta')) +
+      tarjetaMetrica('Tarjetas maduras', stats.maduras + ' / ' + stats.total,
+        UI.barra(stats.total ? (stats.maduras / stats.total) * 100 : 0, 'ok')) +
+      tarjetaMetrica('Dominio global', Estado.dominioGlobal() + '%',
+        UI.barra(Estado.dominioGlobal(), 'ok')) +
+      '</div>';
+
+    /* mapa de calor de los últimos 35 días */
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Constancia (últimos 35 días)</h3>' +
+      '<div class="der sm tenue">Cada cuadro es un día</div></div><div class="mapa-calor">';
+    for (var i = 34; i >= 0; i--) {
+      var f = Estado.hoyISO(-i);
+      var min = Estado.minutosDe(f);
+      var n = min === 0 ? 0 : min < 10 ? 1 : min < 20 ? 2 : min < 40 ? 3 : 4;
+      html += '<i class="' + (n ? 'n' + n : '') + '" title="' + f + ': ' + min + ' min"></i>';
+    }
+    html += '</div></div>';
+
+    /* tabla de temas ordenada por prioridad de repaso */
+    var orden = TUTOR.TEMAS.slice().sort(function (a, b) {
+      return Estado.dominio(a.id) - Estado.dominio(b.id);
+    });
+
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Prioridad de repaso</h3>' +
+      '<div class="der sm tenue">De menor a mayor dominio</div></div>';
+    orden.slice(0, 10).forEach(function (t) {
+      var e = Estado.tema(t.id);
+      var pct = e.intentos ? Math.round((e.aciertos / e.intentos) * 100) : null;
+      var dias = e.ultimo ? Estado.diasEntre(e.ultimo, Estado.hoyISO()) : null;
+      html += '<div class="fila"><div class="crece">' +
+        '<div class="titulo">' + UI.esc(t.nombre) + (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') + '</div>' +
+        '<div class="sub">' +
+        (pct !== null ? pct + '% de acierto · ' : 'sin preguntas respondidas · ') +
+        (dias === null ? 'nunca estudiado' : dias === 0 ? 'hoy' : 'hace ' + dias + (dias === 1 ? ' día' : ' días')) +
+        '</div>' + UI.barra(Estado.dominio(t.id), Estado.dominio(t.id) >= 70 ? 'ok' : 'acento') + '</div>' +
+        '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button></div>';
+    });
+    html += '</div>';
+
+    /* brechas históricas */
+    var brechas = Estado.datos().brechas;
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Registro de brechas</h3>' +
+      '<div class="der sm tenue">' + Estado.brechasAbiertas().length + ' abiertas</div></div>';
+    if (!brechas.length) {
+      html += '<div class="vacio"><span class="emoji">🧩</span>Sin brechas registradas todavía.</div>';
+    } else {
+      brechas.slice(0, 12).forEach(function (b, i) {
+        var t = TUTOR.tema(b.tema);
+        html += '<div class="fila"><div class="crece">' +
+          '<div class="titulo"' + (b.resuelta ? ' style="text-decoration:line-through;opacity:.5"' : '') + '>' +
+          UI.esc(b.texto) + '</div>' +
+          '<div class="sub">' + UI.esc(t ? t.nombre : '') + ' · ' + UI.fechaCorta(b.fecha.slice(0, 10)) + '</div></div>' +
+          (b.resuelta ? '<span class="etiq etiq-ok">Resuelta</span>' :
+            '<button class="btn btn-s" data-accion="cerrar-brecha" data-i="' + i + '">Marcar resuelta</button>') +
+          '</div>';
+      });
+    }
+    html += '</div>';
+
+    return html;
+  }
+});
+
+/* ------------------------------------------------------------
+   PROMPT PARA IA / NOTEBOOKLM
+   ------------------------------------------------------------ */
+UI.registrar('prompt', {
+  titulo: 'Prompt del tutor',
+  sub: 'Genera la instrucción exacta para NotebookLM, Claude o ChatGPT',
+  angosto: true,
+  render: function () {
+    var temas = TUTOR.TEMAS.map(function (t) {
+      return '<option value="' + t.id + '">' + UI.esc(t.nombre) + '</option>';
+    }).join('');
+    var modos = TUTOR.MODOS.map(function (m) {
+      return '<option value="' + m.id + '">' + m.icono + ' ' + UI.esc(m.nombre) + '</option>';
+    }).join('');
+
+    return '<div class="tarjeta">' +
+      '<p class="sm tenue">La app aplica el método por dentro; este generador produce el mismo protocolo en texto, ' +
+      'para que puedas continuar el estudio en NotebookLM con tus apuntes o en cualquier modelo de lenguaje, ' +
+      'manteniendo exactamente las mismas reglas pedagógicas.</p>' +
+      '<div class="rejilla c3">' +
+      '<label class="campo"><span>Tema</span><select id="p-tema">' + temas + '</select></label>' +
+      '<label class="campo"><span>Modo</span><select id="p-modo">' + modos + '</select></label>' +
+      '<label class="campo"><span>Tiempo disponible</span><select id="p-min">' +
+      [10, 20, 30, 45, 60].map(function (m) { return '<option value="' + m + '">' + m + ' minutos</option>'; }).join('') +
+      '</select></label></div>' +
+      '<div class="linea"><button class="btn btn-primario" data-accion="generar-prompt">Generar prompt</button>' +
+      '<button class="btn" data-accion="copiar-prompt">Copiar</button>' +
+      '<span class="sm tenue crece" id="p-estado"></span></div>' +
+      '</div>' +
+      '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Prompt generado</h3></div>' +
+      '<div class="caja-prompt" id="p-salida">Elige tema, modo y tiempo, y pulsa «Generar prompt».</div></div>' +
+      '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Cómo integrarlo con NotebookLM</h3></div>' +
+      '<div class="doc">' +
+      '<ol><li>Sube a NotebookLM tus fuentes: capítulos de Guyton, Costanzo o Braunwald, tus apuntes y los protocolos de tu unidad.</li>' +
+      '<li>Pega el prompt generado como primera instrucción del cuaderno.</li>' +
+      '<li>Estudia el tema aquí con el método y usa NotebookLM para profundizar en lo que la fase Feynman haya marcado como brecha.</li>' +
+      '<li>Vuelve a la app y responde las preguntas de recuperación: lo que se consolida es lo que recuperas, no lo que lees.</li></ol>' +
+      '<div class="aviso"><b>Regla de oro.</b> La IA explica; la memoria se construye recuperando. Usa el chat para entender y esta app para no olvidar.</div>' +
+      '</div></div>';
+  }
+});
+
+/* ------------------------------------------------------------
+   AJUSTES
+   ------------------------------------------------------------ */
+UI.registrar('ajustes', {
+  titulo: 'Ajustes',
+  sub: 'Perfil, disponibilidad y datos',
+  angosto: true,
+  render: function () {
+    var a = Estado.ajustes();
+    var nombres = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+    var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>Perfil</h3></div>' +
+      '<label class="campo"><span>Nombre</span>' +
+      '<input type="text" id="a-nombre" value="' + UI.esc(a.nombre) + '"></label>' +
+      '<label class="campo"><span>Tema visual</span>' +
+      '<div class="conmutador" style="display:inline-flex">' +
+      '<button data-accion="tema-visual" data-valor="auto" class="' + (a.tema === 'auto' ? 'sel' : '') + '">Automático</button>' +
+      '<button data-accion="tema-visual" data-valor="claro" class="' + (a.tema === 'claro' ? 'sel' : '') + '">Claro</button>' +
+      '<button data-accion="tema-visual" data-valor="oscuro" class="' + (a.tema === 'oscuro' ? 'sel' : '') + '">Oscuro</button>' +
+      '</div>' +
+      '<span class="sm tenue">En automático sigue la preferencia de tu sistema o del sitio donde esté incrustada la app.</span>' +
+      '</label></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Minutos disponibles por día</h3>' +
+      '<div class="der sm tenue">Base del plan</div></div>' +
+      '<p class="sm tenue">Sé realista: un plan que no cabe en tu semana se abandona. Es preferible 20 minutos todos los días que 3 horas un domingo.</p>' +
+      '<div class="rejilla c4">';
+    for (var i = 0; i < 7; i++) {
+      html += '<label class="campo"><span>' + nombres[i] + '</span>' +
+        '<input type="number" min="0" max="240" step="5" data-dia="' + i + '" class="min-dia" value="' + (a.minutosPorDia[i] || 0) + '"></label>';
+    }
+    html += '</div>' +
+      '<button class="btn btn-primario" data-accion="guardar-disponibilidad">Guardar y regenerar plan</button></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Repaso espaciado</h3></div>' +
+      '<div class="rejilla c2">' +
+      '<label class="campo"><span>Máximo de tarjetas al día</span>' +
+      '<input type="number" id="a-max" min="5" max="200" value="' + a.maxTarjetasDia + '"></label>' +
+      '<label class="campo"><span>Tarjetas nuevas al día</span>' +
+      '<input type="number" id="a-nuevas" min="0" max="50" value="' + a.tarjetasNuevasDia + '"></label>' +
+      '</div><button class="btn" data-accion="guardar-srs">Guardar</button></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Datos</h3></div>' +
+      '<p class="sm tenue">Almacenamiento actual: <b>' +
+      (Almacen.modo === 'local' ? 'navegador (localStorage)' : 'Google Apps Script (PropertiesService)') +
+      '</b>. Al migrar a Apps Script, el progreso pasa a guardarse en tu cuenta de Google sin cambiar nada del resto de la app.</p>' +
+      '<div class="linea">' +
+      '<button class="btn" data-accion="exportar">Exportar progreso</button>' +
+      '<button class="btn" data-accion="importar">Importar</button>' +
+      '<button class="btn btn-acento" data-accion="reiniciar">Reiniciar todo</button>' +
+      '</div></div>';
+
+    return html;
+  }
+});
+
+
+/* ============================================================
+   ESTUDIO — motor de la sesión guiada con el método MIT
+   Fases: anclaje → comprensión → Feynman → recuperación activa
+          → razonamiento clínico → consolidación
+   ============================================================ */
+
+var Sesion = (function () {
+  var s = null;   // sesión activa
+
+  /* ------------------------------------------------------------
+     Reparto del tiempo entre fases según el modo elegido
+     ------------------------------------------------------------ */
+  function repartirTiempo(modo, minutos) {
+    var total = 0;
+    modo.fases.forEach(function (f) { total += modo.pesos[f] || 0; });
+    return modo.fases.map(function (f) {
+      return {
+        id: f,
+        minutos: Math.max(1, Math.round(minutos * (modo.pesos[f] || 0) / total))
+      };
+    });
+  }
+
+  /* Selección de preguntas según modo y tiempo disponible. */
+  function elegirPreguntas(tema, modo, minutosFase) {
+    var cupo = Math.max(2, Math.min(8, Math.round(minutosFase / 1.6)));
+    var porNivel = { 1: [], 2: [], 3: [] };
+    tema.preguntas.forEach(function (q) { porNivel[q.nivel].push(q); });
+
+    var orden;
+    if (modo.id === 'repaso') orden = [1, 1, 2, 1, 2];
+    else if (modo.id === 'examen') orden = [1, 2, 2, 3, 3, 3];
+    else if (modo.id === 'profundizar') orden = [2, 3, 2, 3, 3];
+    else orden = [1, 2, 2, 3, 1, 3];
+
+    var salida = [];
+    var indices = { 1: 0, 2: 0, 3: 0 };
+    for (var i = 0; i < orden.length && salida.length < cupo; i++) {
+      var n = orden[i];
+      if (porNivel[n][indices[n]]) { salida.push(porNivel[n][indices[n]]); indices[n]++; }
+    }
+    // completar con lo que quede
+    [1, 2, 3].forEach(function (n) {
+      while (salida.length < cupo && porNivel[n][indices[n]]) {
+        salida.push(porNivel[n][indices[n]]); indices[n]++;
+      }
+    });
+    return salida;
+  }
+
+  function iniciar(idTema, idModo, minutos) {
+    var tema = TUTOR.tema(idTema);
+    var modo = TUTOR.modo(idModo);
+    if (!tema) return;
+
+    s = {
+      tema: tema,
+      modo: modo,
+      minutos: minutos,
+      fases: repartirTiempo(modo, minutos),
+      indice: 0,
+      inicio: Date.now(),
+      aciertos: 0,
+      total: 0,
+      preguntas: [],
+      pasoPregunta: 0,
+      pasoCaso: 0,
+      brechasMarcadas: [],
+      bloques: tema.bloques.filter(function (b) {
+        return modo.niveles.indexOf(b.nivel) >= 0;
+      })
+    };
+    var faseRec = s.fases.filter(function (f) { return f.id === 'recuperacion'; })[0];
+    s.preguntas = elegirPreguntas(tema, modo, faseRec ? faseRec.minutos : 6);
+
+    UI.ir('sesion');
+    arrancarCrono();
+  }
+
+  function arrancarCrono() {
+    Crono.iniciar(s.minutos, function (seg, txt) {
+      var el = UI.$('#crono');
+      if (!el) return;
+      el.textContent = txt;
+      el.className = 'cronometro' + (seg < 0 ? ' critico' : seg < 120 ? ' aviso' : '');
+    }, function () {
+      UI.brindis('Se acabó el tiempo previsto. Puedes cerrar la sesión cuando quieras.');
+    });
+  }
+
+  function faseActual() { return s.fases[s.indice]; }
+
+  function avanzar() {
+    var fase = faseActual();
+    if (fase) Estado.registrarFase(s.tema.id, fase.id);
+    if (s.indice < s.fases.length - 1) {
+      s.indice += 1;
+      s.pasoPregunta = 0;
+      s.pasoCaso = 0;
+      UI.refrescar();
+      window.scrollTo(0, 0);
+    } else {
+      cerrar();
+    }
+  }
+
+  function cerrar() {
+    Crono.parar();
+    var transcurrido = Math.max(1, Math.round((Date.now() - s.inicio) / 60000));
+    Estado.cerrarSesion({
+      tema: s.tema.id,
+      modo: s.modo.id,
+      minutos: transcurrido,
+      aciertos: s.aciertos,
+      total: s.total
+    });
+    var resumen = {
+      tema: s.tema, minutos: transcurrido,
+      aciertos: s.aciertos, total: s.total,
+      brechas: s.brechasMarcadas.slice(),
+      dominio: Estado.dominio(s.tema.id)
+    };
+    s = null;
+    UI.ir('resumen', { r: resumen });
+  }
+
+  function abandonar() {
+    Crono.parar();
+    s = null;
+    UI.ir('inicio');
+  }
+
+  /* ============================================================
+     RENDERIZADO POR FASE
+     ============================================================ */
+
+  function cabecera() {
+    var fase = faseActual();
+    var def = TUTOR.FASES[fase.id];
+    var pasos = s.fases.map(function (f, i) {
+      return '<div class="paso-sesion ' + (i < s.indice ? 'hecho' : i === s.indice ? 'actual' : '') + '"></div>';
+    }).join('');
+
+    return '<div class="sesion-cab">' +
+      '<div><div class="sm tenue">' + UI.esc(s.tema.nombre) + '</div>' +
+      '<div style="font-weight:650">' + def.icono + ' ' + def.nombre + '</div></div>' +
+      '<div class="pasos-sesion">' + pasos + '</div>' +
+      '<div class="cronometro" id="crono">--:--</div>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="pausar-sesion" id="btn-pausa">⏸</button>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="abandonar-sesion">Salir</button>' +
+      '</div>' +
+      '<div class="aviso"><b>' + UI.esc(def.lema) + '</b><br>' +
+      '<span class="sm">' + UI.esc(def.principio) + '</span></div>';
+  }
+
+  function pie(textoBoton) {
+    return '<div class="linea fin mt">' +
+      '<button class="btn btn-primario btn-g" data-accion="fase-siguiente">' +
+      (textoBoton || 'Continuar') + ' →</button></div>';
+  }
+
+  function renderAnclaje() {
+    var t = s.tema;
+    return '<div class="tarjeta">' +
+      '<div class="fase-etiqueta"><span class="num">1</span>Antes de leer nada</div>' +
+      '<h2>' + UI.esc(t.anclaje.q) + '</h2>' +
+      '<p class="sm tenue">No busques la respuesta. Escribe lo que recuerdes, aunque sea incompleto o erróneo: ' +
+      'el intento fallido es lo que prepara la codificación del contenido que viene.</p>' +
+      '<textarea id="resp-anclaje" placeholder="Escribe tu respuesta de memoria…"></textarea>' +
+      '<div class="aviso aviso-alerta mt"><b>Pista si te bloqueas:</b> ' + UI.esc(t.anclaje.pista) + '</div>' +
+      '</div>' +
+      '<div class="aviso aviso-acento mt"><b>Idea central del tema.</b> ' + t.ideaCentral + '</div>' +
+      pie('Ya lo intenté, seguir');
+  }
+
+  function renderComprension() {
+    var html = '<div class="tarjeta"><div class="fase-etiqueta"><span class="num">2</span>Construir el mecanismo</div>' +
+      '<div class="doc">';
+    s.bloques.forEach(function (b) {
+      html += '<div class="seccion-tema"><h3>' + UI.esc(b.titulo) +
+        ' <span class="etiq ' + (b.nivel === 'imprescindible' ? 'etiq-acento' : b.nivel === 'importante' ? 'etiq-info' : '') + '">' +
+        TUTOR.NIVELES[b.nivel].nombre + '</span></h3>' +
+        (b.html || '') + UI.cadena(b.cadena) + UI.esquema(b.esquema) + '</div>';
+    });
+    html += '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Variables que debes manejar</h3></div>' +
+      UI.variables(s.tema.variables) + '</div>';
+
+    if (s.modo.niveles.length > 1) {
+      html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Fisiopatología</h3></div>' +
+        '<div class="doc">' + s.tema.fisiopatologia + '</div></div>';
+      html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Correlación clínica</h3></div>' +
+        '<div class="doc">' + s.tema.clinica + '</div></div>';
+    }
+
+    var omitidos = s.tema.bloques.length - s.bloques.length;
+    if (omitidos > 0) {
+      html += '<div class="aviso mt"><b>Modo «poco tiempo» activo.</b> Se han omitido ' + omitidos +
+        ' bloque(s) de nivel complementario para proteger las fases de recuperación y caso clínico, ' +
+        'que son las que producen retención. Puedes verlos en la ficha del tema cuando tengas más margen.</div>';
+    }
+
+    return html + pie('Ahora explícalo tú');
+  }
+
+  function renderFeynman() {
+    var f = s.tema.feynman;
+    var puntos = f.puntos.map(function (p, i) {
+      return '<label class="fila" style="cursor:pointer;gap:9px">' +
+        '<input type="checkbox" class="chk-feynman" data-i="' + i + '" style="width:auto;margin:0">' +
+        '<span class="crece">' + UI.esc(p) + '</span></label>';
+    }).join('');
+
+    return '<div class="tarjeta">' +
+      '<div class="fase-etiqueta"><span class="num">3</span>Técnica Feynman</div>' +
+      '<h2>' + UI.esc(f.consigna) + '</h2>' +
+      '<p class="sm tenue">Escríbelo como se lo explicarías a un residente de primer año, sin volver atrás a mirar. ' +
+      'Si necesitas una palabra técnica para no trabarte, esa palabra es tu brecha.</p>' +
+      '<textarea id="resp-feynman" style="min-height:170px" placeholder="Explícalo con tus palabras…"></textarea>' +
+      '<div class="linea mt"><button class="btn btn-primario" data-accion="revelar-feynman">Comparar con la explicación de referencia</button></div>' +
+      '</div>' +
+      '<div id="feynman-referencia" class="oculto">' +
+      '<div class="tarjeta"><div class="tarjeta-cab"><h3>Autoevaluación</h3>' +
+      '<div class="der sm tenue">Marca lo que SÍ mencionaste</div></div>' +
+      puntos +
+      '<div class="aviso aviso-alerta mt"><b>Lo que dejes sin marcar se registra como brecha</b> y aparecerá en tu panel de inicio y en el plan de repaso.</div>' +
+      '</div>' +
+      '<div class="tarjeta"><div class="tarjeta-cab"><h3>Explicación de referencia</h3></div>' +
+      '<div class="doc">' + f.referencia + '</div></div>' +
+      pie('Registrar brechas y seguir') +
+      '</div>';
+  }
+
+  function renderRecuperacion() {
+    if (!s.preguntas.length) return '<div class="vacio">Sin preguntas disponibles.</div>' + pie();
+
+    var i = s.pasoPregunta;
+    if (i >= s.preguntas.length) {
+      var pct = s.total ? Math.round((s.aciertos / s.total) * 100) : 0;
+      return '<div class="tarjeta centro">' +
+        '<div class="metrica" style="align-items:center"><span class="rotulo">Precisión en esta fase</span>' +
+        '<span class="valor">' + pct + '%</span>' +
+        '<span class="nota">' + s.aciertos + ' de ' + s.total + ' preguntas</span></div>' +
+        UI.barra(pct, pct >= 70 ? 'ok' : 'alerta') +
+        '<p class="sm tenue mt">' + (pct >= 80
+          ? 'Sólido. El tema está entrando en memoria a largo plazo.'
+          : pct >= 50
+            ? 'Va bien, pero conviene un repaso corto en 2 días: es justo cuando la curva de olvido cae más.'
+            : 'Precisión baja: no es fracaso, es información. Este tema vuelve al principio de tu plan.') +
+        '</p></div>' + pie('Ir al caso clínico');
+    }
+
+    var q = s.preguntas[i];
+    var nombresNivel = { 1: 'Nivel 1 · Conocimiento', 2: 'Nivel 2 · Integración', 3: 'Nivel 3 · Razonamiento clínico' };
+
+    return '<div class="tarjeta">' +
+      '<div class="fase-etiqueta"><span class="num">4</span>Recuperación activa · ' + (i + 1) + ' de ' + s.preguntas.length + '</div>' +
+      '<div class="pregunta-bloque" style="border:0;padding:0">' +
+      '<div class="nivel">' + nombresNivel[q.nivel] + '</div>' +
+      '<div class="enunciado" style="font-size:1.08rem">' + q.q + '</div>' +
+      '<textarea id="resp-preg" placeholder="Responde antes de revelar. Escribir obliga a comprometerse."></textarea>' +
+      '<div class="linea mt"><button class="btn btn-primario" data-accion="revelar-respuesta">Revelar respuesta</button></div>' +
+      '<div id="zona-respuesta" class="oculto">' +
+      '<div class="respuesta-oculta">' + q.r + '</div>' +
+      '<div class="autoeval">' +
+      '<button class="btn grado-1" data-accion="calificar-preg" data-ok="0">✗ Fallé</button>' +
+      '<button class="btn grado-2" data-accion="calificar-preg" data-ok="0">~ Dudé mucho</button>' +
+      '<button class="btn grado-3" data-accion="calificar-preg" data-ok="1">◐ Casi completo</button>' +
+      '<button class="btn grado-4" data-accion="calificar-preg" data-ok="1">✓ Correcto</button>' +
+      '</div>' +
+      '<p class="sm tenue mt mb0">Sé honesto: el sistema usa esta calificación para decidir cuándo te vuelve a preguntar. ' +
+      'Sobrevalorarte solo retrasa el momento en que descubres que no lo sabías.</p>' +
+      '</div></div></div>';
+  }
+
+  function renderCaso() {
+    var caso = s.tema.caso;
+    var i = s.pasoCaso;
+
+    var html = '<div class="tarjeta">' +
+      '<div class="fase-etiqueta"><span class="num">5</span>Razonamiento clínico</div>' +
+      '<div class="caso-vineta">' + caso.vineta + '</div></div>';
+
+    if (i >= caso.pasos.length) {
+      html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Cierre del caso</h3></div>' +
+        '<div class="doc">' + caso.cierre + '</div></div>';
+      return html + pie('Consolidar');
+    }
+
+    var paso = caso.pasos[i];
+    html += '<div class="tarjeta">' +
+      '<div class="sm tenue">Pregunta ' + (i + 1) + ' de ' + caso.pasos.length + '</div>' +
+      '<div class="enunciado" style="font-size:1.05rem;font-weight:600;margin:6px 0 12px">' + paso.q + '</div>' +
+      '<textarea id="resp-caso" placeholder="Razona en voz alta: ¿qué variable cambió y por qué?"></textarea>' +
+      '<div class="linea mt">' +
+      '<button class="btn btn-s btn-fantasma" data-accion="pista-caso">Ver pista</button>' +
+      '<button class="btn btn-primario" data-accion="revelar-caso">Revelar razonamiento</button></div>' +
+      '<div id="pista-caso" class="oculto"><div class="aviso aviso-alerta mt">' + UI.esc(paso.pista) + '</div></div>' +
+      '<div id="zona-caso" class="oculto">' +
+      '<div class="respuesta-oculta">' + paso.r + '</div>' +
+      '<div class="linea fin mt"><button class="btn btn-primario" data-accion="siguiente-caso">Siguiente paso →</button></div>' +
+      '</div></div>';
+
+    // pasos ya respondidos, plegados arriba
+    if (i > 0) {
+      html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Cadena reconstruida</h3></div>' +
+        UI.cadena(caso.pasos.slice(0, i).map(function (p, k) { return 'Paso ' + (k + 1); })) + '</div>';
+    }
+    return html;
+  }
+
+  function renderConsolidacion() {
+    var t = s.tema;
+    var nTarjetas = (t.tarjetas || []).length;
+
+    return '<div class="tarjeta">' +
+      '<div class="fase-etiqueta"><span class="num">6</span>Consolidación</div>' +
+      '<h2>Lo que no debe olvidarse de este tema</h2></div>' +
+      bloqueError(t.error) +
+      '<div class="aviso aviso-ok mt"><b>Perla de examen.</b> ' + t.perla + '</div>' +
+      '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Al mazo de repaso espaciado</h3>' +
+      '<div class="der"><span class="etiq etiq-info">' + nTarjetas + ' tarjetas</span></div></div>' +
+      '<p class="sm tenue">Estas tarjetas ya están en tu mazo y el algoritmo las programará según tu rendimiento. ' +
+      'La primera revisión será mañana; después, los intervalos crecen si aciertas y se reinician si fallas.</p>' +
+      '<ul class="lista-limpia">' +
+      (t.tarjetas || []).slice(0, 4).map(function (c) {
+        return '<div class="fila"><div class="crece"><div class="titulo">' + UI.esc(c.f) + '</div></div>' +
+          '<span class="etiq">nueva</span></div>';
+      }).join('') +
+      (nTarjetas > 4 ? '<div class="fila"><div class="sm tenue">y ' + (nTarjetas - 4) + ' más…</div></div>' : '') +
+      '</ul></div>' +
+      '<div class="linea fin mt"><button class="btn btn-primario btn-g" data-accion="fase-siguiente">Cerrar sesión ✓</button></div>';
+  }
+
+  /* ------------------------------------------------------------ */
+  function render() {
+    if (!s) return '<div class="vacio">No hay sesión activa.</div>';
+    var fase = faseActual().id;
+    var cuerpo =
+      fase === 'anclaje' ? renderAnclaje() :
+      fase === 'comprension' ? renderComprension() :
+      fase === 'feynman' ? renderFeynman() :
+      fase === 'recuperacion' ? renderRecuperacion() :
+      fase === 'caso' ? renderCaso() :
+      renderConsolidacion();
+    return cabecera() + cuerpo;
+  }
+
+  return {
+    iniciar: iniciar,
+    render: render,
+    avanzar: avanzar,
+    abandonar: abandonar,
+    activa: function () { return !!s; },
+    datos: function () { return s; },
+    calificar: function (ok) {
+      s.total += 1;
+      if (ok) s.aciertos += 1;
+      Estado.registrarRespuesta(s.tema.id, ok);
+      if (!ok) {
+        var q = s.preguntas[s.pasoPregunta];
+        Estado.anotarBrecha(s.tema.id, 'Pregunta fallada: ' + q.q.slice(0, 90));
+      }
+      s.pasoPregunta += 1;
+      UI.refrescar();
+      window.scrollTo(0, 0);
+    },
+    siguienteCaso: function () {
+      s.pasoCaso += 1;
+      UI.refrescar();
+      window.scrollTo(0, 0);
+    },
+    registrarBrechasFeynman: function (indicesNoMarcados) {
+      var f = s.tema.feynman;
+      indicesNoMarcados.forEach(function (i) {
+        Estado.anotarBrecha(s.tema.id, 'No explicado: ' + f.puntos[i]);
+        s.brechasMarcadas.push(f.puntos[i]);
+      });
+    }
+  };
+})();
+
+
+/* ------------------------------------------------------------
+   VISTA de la sesión y del resumen
+   ------------------------------------------------------------ */
+UI.registrar('sesion', {
+  titulo: function () { return Sesion.activa() ? Sesion.datos().tema.nombre : 'Sesión'; },
+  sub: function () {
+    if (!Sesion.activa()) return '';
+    var s = Sesion.datos();
+    return s.modo.icono + ' ' + UI.esc(s.modo.nombre) + ' · ' + s.minutos + ' min planificados';
+  },
+  angosto: true,
+  render: function () { return Sesion.render(); }
+});
+
+UI.registrar('resumen', {
+  titulo: 'Sesión completada',
+  sub: 'Lo que has consolidado y lo que queda pendiente',
+  angosto: true,
+  render: function (p) {
+    var r = p.r;
+    if (!r) return '<div class="vacio">Sin datos de sesión.</div>';
+    var pct = r.total ? Math.round((r.aciertos / r.total) * 100) : null;
+
+    var html = '<div class="tarjeta centro">' +
+      '<div style="font-size:2.6rem">✅</div>' +
+      '<h2>' + UI.esc(r.tema.nombre) + '</h2>' +
+      '<p class="tenue">' + r.minutos + ' minutos de estudio efectivo</p></div>';
+
+    html += '<div class="rejilla c3 mt">' +
+      tarjetaMetrica('Precisión', pct === null ? '—' : pct + '%',
+        pct === null ? '' : UI.barra(pct, pct >= 70 ? 'ok' : 'alerta')) +
+      tarjetaMetrica('Dominio del tema', r.dominio + '%', UI.barra(r.dominio, 'ok')) +
+      tarjetaMetrica('Brechas nuevas', r.brechas.length,
+        '<span class="nota">' + (r.brechas.length ? 'irán al plan de repaso' : 'explicación completa') + '</span>') +
+      '</div>';
+
+    if (r.brechas.length) {
+      html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Puntos que no explicaste</h3></div>' +
+        r.brechas.map(function (b) {
+          return '<div class="fila"><div class="crece">' + UI.esc(b) + '</div></div>';
+        }).join('') +
+        '<div class="aviso aviso-alerta mt">Estos puntos definen tu próximo repaso. No es un mal resultado: ' +
+        'es exactamente la información que un método de estudio debe darte.</div></div>';
+    }
+
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>¿Y ahora?</h3></div>' +
+      '<div class="linea">' +
+      '<button class="btn btn-primario" data-accion="ir-tarjetas">Repasar tarjetas pendientes</button>' +
+      '<button class="btn" data-accion="ver-tema" data-tema="' + r.tema.id + '">Ver ficha completa</button>' +
+      '<button class="btn btn-fantasma" data-accion="ir-inicio">Volver al inicio</button>' +
+      '</div>' +
+      '<p class="sm tenue mt mb0">La próxima revisión de este tema se ha programado automáticamente. ' +
+      'Repasarlo mañana durante 5 minutos rinde más que releerlo hoy durante 30.</p></div>';
+
+    return html;
+  }
+});
+
+
+/* ------------------------------------------------------------
+   Selector de sesión (tema + modo + tiempo)
+   ------------------------------------------------------------ */
+UI.registrar('preparar', {
+  titulo: 'Preparar sesión',
+  sub: 'Tres preguntas antes de empezar, como haría un tutor',
+  angosto: true,
+  render: function (p) {
+    var temaSel = p.tema || Estado.sugerencia().tema;
+    var t = TUTOR.tema(temaSel);
+
+    var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>1 · ¿Qué tema?</h3></div>' +
+      '<select id="s-tema">' +
+      TUTOR.MODULOS.map(function (m) {
+        var temas = TUTOR.temasDe(m.id);
+        if (!temas.length) return '';
+        return '<optgroup label="' + UI.esc(m.nombre) + '">' +
+          temas.map(function (x) {
+            return '<option value="' + x.id + '"' + (x.id === temaSel ? ' selected' : '') + '>' +
+              (x.alto ? '🔥 ' : '') + UI.esc(x.nombre) + ' · ' + Estado.dominio(x.id) + '%</option>';
+          }).join('') + '</optgroup>';
+      }).join('') + '</select>' +
+      '<div class="aviso mt">' + t.ideaCentral + '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>2 · ¿Cuánto tiempo tienes?</h3></div>' +
+      '<div class="opciones" id="s-minutos">' +
+      [10, 20, 30, 45, 60].map(function (m, i) {
+        return '<button class="opcion' + (m === 30 ? ' sel' : '') + '" data-accion="sel-minutos" data-min="' + m + '">' +
+          m + ' min<small>' + descripcionTiempo(m) + '</small></button>';
+      }).join('') + '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>3 · ¿Comprender, repasar o entrenar?</h3></div>' +
+      '<div class="opciones" id="s-modo">' +
+      TUTOR.MODOS.map(function (m, i) {
+        return '<button class="opcion' + (m.id === 'comprender' ? ' sel' : '') + '" data-accion="sel-modo" data-modo="' + m.id + '" style="flex:1;min-width:190px">' +
+          m.icono + ' ' + UI.esc(m.nombre) + '<small>' + UI.esc(m.descripcion) + '</small></button>';
+      }).join('') + '</div></div>';
+
+    html += '<div class="linea fin mt">' +
+      '<button class="btn btn-primario btn-g" data-accion="lanzar-sesion">Empezar sesión ▶</button></div>';
+
+    return html;
+  }
+});
+
+
+/* ============================================================
+   TARJETAS — repaso con recuperación activa y repetición espaciada
+   Algoritmo SM-2 adaptado (ver Estado.calificarTarjeta)
+   ============================================================ */
+
+var Mazo = (function () {
+  var cola = [];
+  var actual = null;
+  var revelada = false;
+  var sesion = { revisadas: 0, aciertos: 0, inicio: null, filtroTema: null };
+
+  function cargar(idTema) {
+    cola = idTema ? Estado.tarjetasDeTema(idTema) : Estado.tarjetasVencidas();
+    // barajar para evitar el aprendizaje por orden
+    for (var i = cola.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = cola[i]; cola[i] = cola[j]; cola[j] = tmp;
+    }
+    sesion = { revisadas: 0, aciertos: 0, inicio: Date.now(), filtroTema: idTema || null };
+    siguiente();
+  }
+
+  function siguiente() {
+    actual = cola.shift() || null;
+    revelada = false;
+  }
+
+  function revelar() { revelada = true; UI.refrescar(); }
+
+  function calificar(grado) {
+    if (!actual) return;
+    var e = Estado.calificarTarjeta(actual.id, grado);
+    sesion.revisadas += 1;
+    if (grado >= 3) sesion.aciertos += 1;
+    if (grado === 1) cola.push(actual);       // vuelve al final de la cola de hoy
+    siguiente();
+    UI.refrescar();
+    window.scrollTo(0, 0);
+  }
+
+  function intervaloTexto(grado) {
+    if (!actual) return '';
+    var e = Estado.tarjeta(actual.id);
+    var s = TUTOR.SRS;
+    if (grado === 1) return 'hoy';
+    var reps = e.repeticiones + 1;
+    var intervalo;
+    if (reps === 1) intervalo = s.primerIntervalo;
+    else if (reps === 2) intervalo = s.segundoIntervalo;
+    else {
+      var mult = grado === 2 ? s.multiplicadorDificil : grado === 4 ? e.facilidad * s.multiplicadorFacil : e.facilidad;
+      intervalo = Math.round(e.intervalo * mult);
+    }
+    intervalo = Math.min(s.intervaloMaximo, Math.max(1, intervalo));
+    if (intervalo === 1) return 'mañana';
+    if (intervalo < 30) return intervalo + ' días';
+    return Math.round(intervalo / 30) + ' meses';
+  }
+
+  return {
+    cargar: cargar,
+    revelar: revelar,
+    calificar: calificar,
+    actual: function () { return actual; },
+    revelada: function () { return revelada; },
+    restantes: function () { return cola.length; },
+    sesion: function () { return sesion; },
+    intervaloTexto: intervaloTexto
+  };
+})();
+
+
+UI.registrar('tarjetas', {
+  titulo: 'Tarjetas',
+  sub: function () {
+    var s = Estado.estadisticasTarjetas();
+    return s.vencenHoy + ' pendientes hoy · ' + s.total + ' en el mazo';
+  },
+  acciones: function () {
+    return '<button class="btn btn-s btn-fantasma" data-accion="mazo-por-tema">Elegir tema</button>';
+  },
+  angosto: true,
+
+  render: function () {
+    var c = Mazo.actual();
+    var stats = Estado.estadisticasTarjetas();
+
+    /* --- sin tarjetas en cola --- */
+    if (!c) {
+      var s = Mazo.sesion();
+      var html = '';
+      if (s.revisadas > 0) {
+        var pct = Math.round((s.aciertos / s.revisadas) * 100);
+        html += '<div class="tarjeta centro"><div style="font-size:2.6rem">🎉</div>' +
+          '<h2>Repaso terminado</h2>' +
+          '<p class="tenue">' + s.revisadas + ' tarjetas revisadas · ' + pct + '% de aciertos</p>' +
+          UI.barra(pct, pct >= 70 ? 'ok' : 'alerta') +
+          '<p class="sm tenue mt">Las que fallaste vuelven mañana; las que dominaste, más adelante. ' +
+          'Ese espaciado creciente es lo que convierte el repaso en memoria a largo plazo.</p></div>';
+      } else {
+        html += '<div class="tarjeta"><div class="vacio"><span class="emoji">☕</span>' +
+          'No hay tarjetas pendientes ahora mismo.<br>' +
+          '<span class="sm">El algoritmo las devuelve justo antes de que las olvidarías. Adelantarte no mejora la retención.</span></div></div>';
+      }
+
+      html += '<div class="rejilla c4 mt">' +
+        tarjetaMetrica('En el mazo', stats.total, '') +
+        tarjetaMetrica('Nuevas', stats.nuevas, '') +
+        tarjetaMetrica('Aprendiendo', stats.aprendiendo, '') +
+        tarjetaMetrica('Maduras', stats.maduras, '<span class="nota">intervalo ≥ 21 días</span>') +
+        '</div>';
+
+      html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Repasar por tema</h3>' +
+        '<div class="der sm tenue">Fuera del calendario</div></div>' +
+        '<p class="sm tenue">Útil la víspera de un examen o cuando quieras reforzar un tema concreto. ' +
+        'No sustituye al repaso programado.</p>';
+      TUTOR.MODULOS.forEach(function (m) {
+        TUTOR.temasDe(m.id).forEach(function (t) {
+          html += '<div class="fila"><div class="crece">' +
+            '<div class="titulo">' + UI.esc(t.nombre) + '</div>' +
+            '<div class="sub">' + (t.tarjetas || []).length + ' tarjetas · dominio ' + Estado.dominio(t.id) + '%</div></div>' +
+            '<button class="btn btn-s" data-accion="mazo-tema" data-tema="' + t.id + '">Repasar</button></div>';
+        });
+      });
+      html += '</div>';
+      return html;
+    }
+
+    /* --- tarjeta activa --- */
+    var tema = TUTOR.tema(c.tema);
+    var e = Estado.tarjeta(c.id);
+    var nueva = e.nueva !== false && !e.ultimo;
+
+    var html = '<div class="linea entre" style="margin-bottom:12px">' +
+      '<div><span class="etiq ' + (nueva ? 'etiq-info' : 'etiq') + '">' + (nueva ? 'Nueva' : 'Repaso') + '</span> ' +
+      '<span class="sm tenue">' + UI.esc(tema ? tema.nombre : '') + '</span></div>' +
+      '<div class="sm tenue">' + Mazo.restantes() + ' restantes</div></div>';
+
+    html += '<div class="mazo-tarjeta">' +
+      '<div class="frente">' + UI.esc(c.frente) + '</div>' +
+      (Mazo.revelada() ? '<div class="dorso">' + UI.esc(c.dorso) + '</div>' : '') +
+      '</div>';
+
+    if (!Mazo.revelada()) {
+      html += '<div class="linea fin mt">' +
+        '<button class="btn btn-primario btn-g btn-bloque" data-accion="revelar-tarjeta">Mostrar respuesta</button></div>' +
+        '<p class="sm tenue centro mt">Intenta recuperarla mentalmente antes de mostrarla. ' +
+        'El esfuerzo de recordar es lo que fija la memoria, no la lectura de la respuesta.</p>';
+    } else {
+      html += '<div class="grados">' +
+        '<button class="btn grado grado-1" data-accion="calificar-tarjeta" data-g="1">Otra vez<small>' + Mazo.intervaloTexto(1) + '</small></button>' +
+        '<button class="btn grado grado-2" data-accion="calificar-tarjeta" data-g="2">Difícil<small>' + Mazo.intervaloTexto(2) + '</small></button>' +
+        '<button class="btn grado grado-3" data-accion="calificar-tarjeta" data-g="3">Bien<small>' + Mazo.intervaloTexto(3) + '</small></button>' +
+        '<button class="btn grado grado-4" data-accion="calificar-tarjeta" data-g="4">Fácil<small>' + Mazo.intervaloTexto(4) + '</small></button>' +
+        '</div>' +
+        '<div class="linea centro mt"><button class="btn btn-s btn-fantasma crece" data-accion="ver-tema" data-tema="' + c.tema + '">' +
+        'Ver el tema completo</button></div>';
+    }
+
+    return html;
+  }
+});
+
+
+/* ============================================================
+   APP — acciones, generador de prompt y arranque
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   Navegación
+   ------------------------------------------------------------ */
+var NAVEGACION = [
+  { grupo: 'Estudio' },
+  { ruta: 'inicio', icono: '🏠', nombre: 'Inicio', movil: true },
+  { ruta: 'preparar', icono: '▶️', nombre: 'Nueva sesión', movil: true },
+  { ruta: 'tarjetas', icono: '🔁', nombre: 'Tarjetas', movil: true, globo: 'tarjetas' },
+  { grupo: 'Organización' },
+  { ruta: 'plan', icono: '🗓️', nombre: 'Plan', movil: true },
+  { ruta: 'temario', icono: '📚', nombre: 'Temario' },
+  { ruta: 'rendimiento', icono: '📊', nombre: 'Rendimiento', movil: true },
+  { grupo: 'Herramientas' },
+  { ruta: 'prompt', icono: '🤖', nombre: 'Prompt IA' },
+  { ruta: 'ajustes', icono: '⚙️', nombre: 'Ajustes' }
+];
+
+function pintarNavegacion() {
+  var lateral = UI.$('#nav-lateral');
+  lateral.innerHTML = NAVEGACION.map(function (n) {
+    if (n.grupo) return '<div class="nav-titulo">' + n.grupo + '</div>';
+    return '<button class="nav-item" data-accion="navegar" data-ruta="' + n.ruta + '">' +
+      '<span class="ico">' + n.icono + '</span>' + n.nombre +
+      (n.globo ? '<span data-globo="' + n.globo + '"></span>' : '') + '</button>';
+  }).join('');
+
+  UI.$('#menu-movil').innerHTML = NAVEGACION.filter(function (n) { return n.movil; })
+    .map(function (n) {
+      return '<button data-accion="navegar" data-ruta="' + n.ruta + '">' +
+        '<span class="ico">' + n.icono + '</span>' + n.nombre +
+        (n.globo ? '<span data-globo="' + n.globo + '"></span>' : '') + '</button>';
+    }).join('');
+}
+
+/* ------------------------------------------------------------
+   Generador del prompt del tutor
+   ------------------------------------------------------------ */
+function construirPrompt(idTema, idModo, minutos) {
+  var t = TUTOR.tema(idTema);
+  var m = TUTOR.modo(idModo);
+  var a = Estado.ajustes();
+  var dom = Estado.dominio(idTema);
+  var brechas = Estado.brechasAbiertas().filter(function (b) { return b.tema === idTema; });
+
+  var L = [];
+  L.push('# TUTOR DE FISIOLOGÍA Y FISIOPATOLOGÍA CARDIOVASCULAR');
+  L.push('');
+  L.push('## 1. ROL');
+  L.push('Actúa como tutor experto en fisiología y fisiopatología cardiovascular para estudiantes de Medicina, con nivel académico equivalente al de un docente universitario clínico.');
+  L.push('Tu objetivo no es entregarme información, sino ayudarme a comprender, integrar, razonar y recordar.');
+  L.push('Tengo bases sólidas de anatomía, fisiología general y bioquímica. No expliques lo elemental salvo que detectes una brecha conceptual que impida comprender el tema.');
+  L.push('');
+  L.push('## 2. CONTEXTO DE ESTA SESIÓN');
+  L.push('- Tema: ' + t.nombre + (t.alto ? '  [ALTO RENDIMIENTO]' : ''));
+  L.push('- Tiempo disponible: ' + minutos + ' minutos');
+  L.push('- Modo solicitado: ' + m.nombre + ' — ' + m.descripcion);
+  L.push('- Mi dominio actual estimado del tema: ' + dom + '%');
+  if (brechas.length) {
+    L.push('- Brechas ya detectadas que debes atacar de forma prioritaria:');
+    brechas.slice(0, 6).forEach(function (b) { L.push('  · ' + b.texto); });
+  }
+  L.push('');
+  L.push('## 3. PRINCIPIO CENTRAL DE ENSEÑANZA');
+  L.push('Construye cada tema con esta lógica, sin saltarte pasos:');
+  L.push('FISIOLOGÍA NORMAL → ¿qué variable cambia? → ¿por qué cambia? → ¿qué mecanismos compensatorios aparecen? → ¿qué consecuencias produce? → ¿cómo se manifiesta clínicamente? → ¿cómo se reconoce o diagnostica?');
+  L.push('No quiero listas aisladas. Quiero poder responder «si ocurre X, ¿por qué sucede Y?» y después «si ocurre Y, ¿qué espero encontrar en el paciente?».');
+  L.push('');
+  L.push('## 4. ESTRUCTURA DE LA EXPLICACIÓN');
+  L.push('1. IDEA CENTRAL (2–4 frases: qué debo entender realmente)');
+  L.push('2. FISIOLOGÍA NORMAL');
+  L.push('3. MECANISMO paso a paso, usando flechas cuando ayuden (↓volumen → ↓retorno venoso → ↓precarga → ↓VS → ↓GC → ↓PA)');
+  L.push('4. VARIABLES CLAVE con su dirección de cambio (↑/↓)');
+  L.push('5. FISIOPATOLOGÍA');
+  L.push('6. CORRELACIÓN CLÍNICA (signos, síntomas, examen físico, laboratorio, ECG o imagen)');
+  L.push('7. ERROR FRECUENTE (qué se confunde, por qué se parecen, cuál es la diferencia real, ejemplo clínico y regla mental)');
+  L.push('8. PERLA DE EXAMEN');
+  L.push('Marca los conceptos especialmente rentables como: 🔥 ALTO RENDIMIENTO');
+  L.push('');
+  L.push('## 5. ADAPTACIÓN AL TIEMPO (' + minutos + ' MIN)');
+  if (minutos <= 15) {
+    L.push('Modo REPASO RÁPIDO. Entrega: 5–10 conceptos esenciales, las relaciones fisiológicas fundamentales, 3 errores frecuentes, 5 preguntas rápidas y 3 perlas de examen. Debe poder revisarse en unos 10 minutos. No te extiendas.');
+  } else if (minutos <= 25) {
+    L.push('Modo POCO TIEMPO. Divide el contenido en IMPRESCINDIBLE / IMPORTANTE / COMPLEMENTARIO y cubre solo lo imprescindible salvo que sobre tiempo. No gastes tiempo en detalles de bajo rendimiento ni en conversación innecesaria.');
+  } else if (minutos <= 45) {
+    L.push('Modo TUTOR INTENSIVO. Identifica los conceptos fundamentales, explícalos rápido, detecta mis brechas mediante preguntas, corrígelas, aplícalas a casos clínicos y termina con preguntas de integración.');
+  } else {
+    L.push('Modo PROFUNDIZACIÓN. Puedes abordar mecanismos celulares, receptores, segundos mensajeros, electrofisiología, curvas presión-volumen, hemodinámica y regulación neurohumoral, manteniendo siempre la conexión con la clínica.');
+  }
+  L.push('');
+  L.push('## 6. MÉTODO DE INTERACCIÓN (lo más importante)');
+  L.push('No seas un libro de texto que habla: hazme razonar.');
+  L.push('- Si puedo deducir una respuesta a partir de un principio fisiológico, guíame a deducirla en lugar de dármela.');
+  L.push('- Construye cadenas de razonamiento progresivas: «¿qué determina el gasto cardíaco?» → «si baja el retorno venoso, ¿qué ocurre con la precarga?» → «¿y con el volumen sistólico?» → «¿qué compensación esperarías?».');
+  L.push('- En los casos clínicos, formula las preguntas de una en una y ESPERA mi respuesta antes de continuar. No adelantes las soluciones.');
+  L.push('- Si detectas que confundo dos conceptos, detente y explícame: qué confundo, por qué se parecen, cuál es la diferencia real, un ejemplo clínico y una regla mental para no volver a confundirlos.');
+  L.push('');
+  if (m.id === 'examen') {
+    L.push('## 7. MODO EXAMEN (activo)');
+    L.push('No me des la respuesta de entrada. Hazme preguntas progresivas. Tras cada respuesta mía: indica si es correcta, explica por qué, corrige mis errores, expón el razonamiento correcto y súbeme la dificultad.');
+    L.push('');
+  }
+  L.push('## 8. PREGUNTAS DE ENTRENAMIENTO');
+  L.push('Al terminar el tema, genera preguntas en tres niveles:');
+  L.push('- NIVEL 1 (conocimiento): conceptos fundamentales.');
+  L.push('- NIVEL 2 (integración): relacionar dos o más conceptos.');
+  L.push('- NIVEL 3 (razonamiento clínico): casos donde deba deducir qué ocurre.');
+  L.push('Prioriza «¿qué ocurriría si…?», «¿cuál es el mecanismo que explica…?», «¿qué variable cambió primero?», «¿qué compensación esperarías?», «¿qué pasa si ese mecanismo falla?».');
+  L.push('');
+  L.push('## 9. FUENTES');
+  L.push('Usa conceptos compatibles con Guyton & Hall, Boron & Boulpaep, Costanzo, Harrison y Braunwald. Si hay diferencias relevantes entre fuentes, indícalas. No inventes referencias.');
+  L.push('');
+  L.push('## 10. ARRANQUE');
+  L.push('Empieza directamente por lo más importante del tema indicado. No me preguntes de nuevo el tema ni el tiempo: ya están arriba.');
+  L.push('Al terminar cada concepto importante, pregúntame: «¿lo llevamos a un caso clínico o avanzamos?». Si el tiempo es escaso, prioriza avanzar.');
+
+  return L.join('\n');
+}
+
+/* ------------------------------------------------------------
+   ACCIONES
+   ------------------------------------------------------------ */
+
+UI.accion('navegar', function (d) {
+  if (Sesion.activa() && d.ruta !== 'sesion') {
+    if (!confirm('Hay una sesión en curso. ¿Salir y perder el progreso de esta sesión?')) return;
+    Sesion.abandonar();
+  }
+  UI.ir(d.ruta);
+});
+
+UI.accion('ir-inicio', function () { UI.ir('inicio'); });
+UI.accion('ver-temario', function () { UI.ir('temario'); });
+UI.accion('ver-rendimiento', function () { UI.ir('rendimiento'); });
+UI.accion('ver-tema', function (d) { UI.ir('tema', { tema: d.tema }); });
+
+UI.accion('ir-tarjetas', function () {
+  Mazo.cargar(null);
+  UI.ir('tarjetas');
+});
+
+/* --- arranque de sesiones --- */
+UI.accion('empezar-sugerido', function () {
+  var s = Estado.sugerencia();
+  UI.ir('preparar', { tema: s.tema });
+});
+
+UI.accion('arranque-rapido', function (d) {
+  var min = parseInt(d.min, 10);
+  var s = Estado.sugerencia();
+  var modo = min <= 10 ? 'repaso' : min <= 20 ? 'comprender' : min <= 30 ? 'comprender' : min <= 45 ? 'intensivo' : 'profundizar';
+  Sesion.iniciar(s.tema, modo, min);
+});
+
+UI.accion('estudiar-tema', function (d) {
+  UI.ir('preparar', { tema: d.tema });
+});
+
+UI.accion('repasar-brecha', function (d) {
+  UI.ir('preparar', { tema: d.tema });
+});
+
+var seleccion = { minutos: 30, modo: 'comprender' };
+
+UI.accion('sel-minutos', function (d, el) {
+  seleccion.minutos = parseInt(d.min, 10);
+  UI.$$('#s-minutos .opcion').forEach(function (b) { b.classList.remove('sel'); });
+  el.classList.add('sel');
+});
+
+UI.accion('sel-modo', function (d, el) {
+  seleccion.modo = d.modo;
+  UI.$$('#s-modo .opcion').forEach(function (b) { b.classList.remove('sel'); });
+  el.classList.add('sel');
+});
+
+UI.accion('lanzar-sesion', function () {
+  var tema = UI.$('#s-tema').value;
+  Sesion.iniciar(tema, seleccion.modo, seleccion.minutos);
+});
+
+/* --- dentro de la sesión --- */
+UI.accion('fase-siguiente', function () { Sesion.avanzar(); });
+
+UI.accion('abandonar-sesion', function () {
+  if (confirm('¿Salir de la sesión? El progreso de esta sesión no se guardará.')) Sesion.abandonar();
+});
+
+UI.accion('pausar-sesion', function (d, el) {
+  var pausado = Crono.alternarPausa();
+  el.textContent = pausado ? '▶' : '⏸';
+  UI.brindis(pausado ? 'Sesión en pausa' : 'Sesión reanudada');
+});
+
+UI.accion('revelar-feynman', function (d, el) {
+  UI.$('#feynman-referencia').classList.remove('oculto');
+  el.disabled = true;
+  el.textContent = 'Referencia mostrada';
+  UI.$('#feynman-referencia').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+UI.accion('revelar-respuesta', function (d, el) {
+  UI.$('#zona-respuesta').classList.remove('oculto');
+  el.disabled = true;
+});
+
+UI.accion('calificar-preg', function (d) {
+  Sesion.calificar(d.ok === '1');
+});
+
+UI.accion('pista-caso', function (d, el) {
+  UI.$('#pista-caso').classList.remove('oculto');
+  el.disabled = true;
+});
+
+UI.accion('revelar-caso', function (d, el) {
+  UI.$('#zona-caso').classList.remove('oculto');
+  el.disabled = true;
+});
+
+UI.accion('siguiente-caso', function () { Sesion.siguienteCaso(); });
+
+/* --- tarjetas --- */
+UI.accion('revelar-tarjeta', function () { Mazo.revelar(); });
+UI.accion('calificar-tarjeta', function (d) {
+  Mazo.calificar(parseInt(d.g, 10));
+  UI.actualizarGlobos();
+});
+UI.accion('mazo-tema', function (d) { Mazo.cargar(d.tema); UI.refrescar(); });
+UI.accion('repasar-tarjetas-tema', function (d) { Mazo.cargar(d.tema); UI.ir('tarjetas'); });
+UI.accion('mazo-por-tema', function () { Mazo.cargar('__ninguno__'); UI.refrescar(); });
+
+/* --- plan --- */
+UI.accion('generar-plan', function () {
+  Estado.generarPlan(14);
+  UI.ir('plan');
+  UI.brindis('Plan regenerado para 14 días');
+});
+
+UI.accion('editar-disponibilidad', function () { UI.ir('ajustes'); });
+
+UI.accion('guardar-disponibilidad', function () {
+  var mapa = {};
+  UI.$$('.min-dia').forEach(function (i) {
+    mapa[i.dataset.dia] = parseInt(i.value, 10) || 0;
+  });
+  Estado.guardarAjustes({
+    minutosPorDia: mapa,
+    nombre: UI.$('#a-nombre') ? UI.$('#a-nombre').value.trim() || 'Diego' : Estado.ajustes().nombre
+  });
+  Estado.generarPlan(14);
+  UI.brindis('Disponibilidad guardada y plan regenerado');
+  UI.ir('plan');
+});
+
+UI.accion('guardar-srs', function () {
+  Estado.guardarAjustes({
+    maxTarjetasDia: parseInt(UI.$('#a-max').value, 10) || 40,
+    tarjetasNuevasDia: parseInt(UI.$('#a-nuevas').value, 10) || 8
+  });
+  UI.actualizarGlobos();
+  UI.brindis('Preferencias de repaso guardadas');
+});
+
+UI.accion('tema-visual', function (d) {
+  Estado.guardarAjustes({ tema: d.valor });
+  UI.aplicarTema(d.valor);
+  UI.refrescar();
+});
+
+/* --- brechas --- */
+UI.accion('cerrar-brecha', function (d) {
+  Estado.resolverBrecha(parseInt(d.i, 10));
+  UI.refrescar();
+  UI.brindis('Brecha marcada como resuelta');
+});
+
+/* --- prompt --- */
+UI.accion('generar-prompt', function () {
+  var texto = construirPrompt(
+    UI.$('#p-tema').value,
+    UI.$('#p-modo').value,
+    parseInt(UI.$('#p-min').value, 10)
+  );
+  UI.$('#p-salida').textContent = texto;
+  UI.$('#p-estado').textContent = texto.length + ' caracteres · listo para pegar';
+});
+
+UI.accion('copiar-prompt', function () {
+  var texto = UI.$('#p-salida').textContent;
+  if (!texto || texto.indexOf('Elige tema') === 0) {
+    UI.brindis('Genera primero el prompt');
+    return;
+  }
+  copiarTexto(texto);
+  UI.brindis('Prompt copiado al portapapeles');
+});
+
+function copiarTexto(texto) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texto);
+      return;
+    }
+  } catch (e) { /* se usa el método alternativo */ }
+  var ta = document.createElement('textarea');
+  ta.value = texto;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) { }
+  ta.remove();
+}
+
+/* --- datos --- */
+UI.accion('exportar', function () {
+  copiarTexto(Estado.exportar());
+  UI.modal('<h3>Progreso exportado</h3>' +
+    '<p class="sm tenue">Se ha copiado al portapapeles en formato JSON. Guárdalo donde quieras; ' +
+    'podrás recuperarlo con «Importar», también tras migrar la app a Apps Script.</p>' +
+    '<textarea readonly style="min-height:200px;font-family:var(--mono);font-size:.75rem">' +
+    UI.esc(Estado.exportar()) + '</textarea>' +
+    '<div class="linea fin mt"><button class="btn btn-primario" data-accion="cerrar-modal">Cerrar</button></div>');
+});
+
+UI.accion('importar', function () {
+  UI.modal('<h3>Importar progreso</h3>' +
+    '<p class="sm tenue">Pega aquí el JSON exportado previamente. Se sustituirá todo tu progreso actual.</p>' +
+    '<textarea id="json-importar" style="min-height:200px;font-family:var(--mono);font-size:.75rem" placeholder="{ … }"></textarea>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-primario" data-accion="confirmar-importar">Importar</button></div>');
+});
+
+UI.accion('confirmar-importar', function () {
+  var ok = Estado.importar(UI.$('#json-importar').value);
+  UI.cerrarModal();
+  UI.brindis(ok ? 'Progreso importado' : 'El JSON no es válido');
+  if (ok) { UI.aplicarTema(Estado.ajustes().tema); UI.ir('inicio'); }
+});
+
+UI.accion('reiniciar', function () {
+  UI.modal('<h3>Reiniciar todo</h3>' +
+    '<p>Se borrarán el progreso, las tarjetas, el plan y las brechas registradas. Esta acción no se puede deshacer.</p>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-acento" data-accion="confirmar-reiniciar">Sí, reiniciar</button></div>');
+});
+
+UI.accion('confirmar-reiniciar', function () {
+  Estado.reiniciar();
+  UI.cerrarModal();
+  UI.aplicarTema(Estado.ajustes().tema);
+  UI.ir('inicio');
+  UI.brindis('Progreso reiniciado');
+});
+
+UI.accion('cerrar-modal', function () { UI.cerrarModal(); });
+
+/* ------------------------------------------------------------
+   Feynman: registrar brechas al avanzar de fase
+   ------------------------------------------------------------ */
+(function interceptarFeynman() {
+  var avanzarOriginal = Sesion.avanzar;
+  Sesion.avanzar = function () {
+    if (Sesion.activa()) {
+      var s = Sesion.datos();
+      if (s.fases[s.indice].id === 'feynman') {
+        var casillas = UI.$$('.chk-feynman');
+        if (casillas.length) {
+          var noMarcados = [];
+          casillas.forEach(function (c) {
+            if (!c.checked) noMarcados.push(parseInt(c.dataset.i, 10));
+          });
+          Sesion.registrarBrechasFeynman(noMarcados);
+          if (noMarcados.length) {
+            UI.brindis(noMarcados.length + ' brecha(s) registrada(s) para tu próximo repaso');
+          }
+        }
+      }
+    }
+    avanzarOriginal();
+  };
+})();
+
+/* ------------------------------------------------------------
+   ARRANQUE
+   ------------------------------------------------------------ */
+function arrancar() {
+  Estado.iniciar().then(function () {
+    UI.aplicarTema(Estado.ajustes().tema);
+    pintarNavegacion();
+
+    // Genera un plan inicial la primera vez.
+    if (!Object.keys(Estado.plan()).length) Estado.generarPlan(14);
+
+    UI.ir('inicio');
+    UI.actualizarGlobos();
+    Estado.suscribir(function () { UI.actualizarGlobos(); });
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', arrancar);
+} else {
+  arrancar();
+}
+
+</script>
