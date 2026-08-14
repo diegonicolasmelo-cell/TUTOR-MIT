@@ -163,6 +163,13 @@ var Taller = (function () {
     L.push('- **preguntas**: 6–9 en total, repartidas en nivel 1 (conocimiento), nivel 2 (integración) y nivel 3 (razonamiento clínico). Cada una con "q" y "r" completa.');
     L.push('- **caso**: una viñeta clínica realista y entre 5 y 7 "pasos", cada uno con "q" (pregunta socrática), "pista" y "r" (razonamiento completo). Más "cierre" con la lección del caso.');
     L.push('- **tarjetas**: 5–9 objetos con "f" (frente: pregunta o concepto) y "d" (dorso: respuesta autocontenida). Deben poder entenderse fuera de contexto.');
+    if (cfg.mcq) {
+      L.push('- **mcq** (preguntas de alternativa): 4–6 preguntas, cada una con "n" (nivel 1, 2 o 3), "q" (enunciado) y "o" (exactamente 4 opciones).');
+      L.push('  Cada opción lleva "t" (texto) y "r" (explicación), y **solo una** lleva además "ok": true.');
+      L.push('  REGLA CLAVE de los distractores: cada opción incorrecta debe ser un **error conceptual concreto y frecuente**, no relleno ni un absurdo evidente.');
+      L.push('  Su "r" debe explicar por qué resulta tentadora y por qué falla. La "r" de la correcta explica por qué lo es.');
+      L.push('  Un distractor bien elegido enseña tanto como la respuesta correcta; uno de relleno no enseña nada.');
+    }
     L.push('');
     L.push('## IDENTIFICADORES');
     L.push('Los campos "id" deben ir en minúsculas, sin acentos ni espacios, separados por guiones. Ejemplo: "cascada-coagulacion".');
@@ -251,6 +258,24 @@ var Taller = (function () {
         { f: '...', d: '...' }
       ]
     }];
+    if (cfg.mcq) {
+      salida.temas[0].mcq = [
+        { n: 1, q: 'enunciado', o: [
+          { t: 'opción incorrecta', r: 'qué error conceptual representa y por qué falla' },
+          { t: 'opción correcta', ok: true, r: 'por qué es la correcta' },
+          { t: 'opción incorrecta', r: '...' },
+          { t: 'opción incorrecta', r: '...' }
+        ] },
+        { n: 2, q: '...', o: [
+          { t: '...', r: '...' }, { t: '...', ok: true, r: '...' },
+          { t: '...', r: '...' }, { t: '...', r: '...' }
+        ] },
+        { n: 3, q: '...', o: [
+          { t: '...', r: '...' }, { t: '...', ok: true, r: '...' },
+          { t: '...', r: '...' }, { t: '...', r: '...' }
+        ] }
+      ];
+    }
     return salida;
   }
 
@@ -457,6 +482,34 @@ var Taller = (function () {
       }).filter(function (x) { return x.f && x.d; });
       if (t.tarjetas.length < 3) errores.push(ref + ': se necesitan al menos 3 tarjetas (hay ' + t.tarjetas.length + ').');
 
+      /* preguntas de alternativa (opcionales) */
+      t.mcq = [];
+      (bruto.mcq || []).forEach(function (m, k) {
+        var ref2 = ref + '.mcq[' + k + ']';
+        var enunciado = limpiarHtml(m.q);
+        var opciones = (m.o || []).map(function (o) {
+          var op = { t: limpiarTexto(o.t), r: limpiarTexto(o.r) };
+          if (o.ok === true || o.ok === 'true') op.ok = true;
+          return op;
+        }).filter(function (o) { return o.t; });
+
+        if (!enunciado) { avisos.push(ref2 + ': sin enunciado, se descarta.'); return; }
+        if (opciones.length < 3) { avisos.push(ref2 + ': menos de 3 opciones, se descarta.'); return; }
+
+        var correctas = opciones.filter(function (o) { return o.ok; }).length;
+        if (correctas !== 1) {
+          avisos.push(ref2 + ': tiene ' + correctas + ' opciones marcadas como correctas (debe haber exactamente 1). Se descarta.');
+          return;
+        }
+        var sinRazon = opciones.filter(function (o) { return !o.r; }).length;
+        if (sinRazon) {
+          avisos.push(ref2 + ': ' + sinRazon + ' opciones sin explicación. Se importa, pero la revisión será menos útil.');
+        }
+        var nivel = parseInt(m.n, 10);
+        if ([1, 2, 3].indexOf(nivel) < 0) nivel = 1;
+        t.mcq.push({ n: nivel, q: enunciado, o: opciones });
+      });
+
       /* Marcas de procedencia */
       t.propio = true;
       t.verificado = false;
@@ -604,7 +657,12 @@ UI.registrar('taller', {
       '<label class="campo"><span>Fuentes que usarás <span class="tenue">(opcional, se incluye en el prompt)</span></span>' +
       '<textarea id="t-fuentes" style="min-height:70px" placeholder="Apuntes de la cátedra, tema 4; guía de la unidad sobre anticoagulación; paper de Smith 2023 sobre CID"></textarea></label>' +
 
-      '<button class="btn btn-primario" data-accion="taller-generar">Generar prompt</button>' +
+      '<label class="fila" style="cursor:pointer;gap:9px;border:0;padding:4px 0">' +
+      '<input type="checkbox" id="t-mcq" checked style="width:auto;margin:0">' +
+      '<span class="crece"><b>Incluir preguntas de alternativa</b>' +
+      '<div class="sub">Se añaden al banco de simulacros, con la explicación de por qué falla cada distractor.</div></span></label>' +
+
+      '<button class="btn btn-primario mt" data-accion="taller-generar">Generar prompt</button>' +
       '</div>';
 
     /* --- paso 2: prompt --- */

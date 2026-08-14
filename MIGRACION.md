@@ -87,7 +87,14 @@ sincroniza entre el ordenador y el móvil automáticamente. El estado se guarda 
 **Límite de 9 KB por propiedad.** `guardarEstado()` ya lo contempla: si el JSON supera los
 8.000 caracteres, lo reparte en fragmentos numerados y `leerEstadoCompleto()` lo reensambla.
 Con 32 temas y 252 tarjetas el estado ronda los 40–60 KB en uso intensivo, así que la
-fragmentación se activará con seguridad.
+fragmentación se activará con seguridad. El historial de exámenes, las fuentes y las notas
+suman a esa cifra: son las tres claves que más crecen con el uso.
+
+**La biblioteca guarda referencias, no archivos.** Ni `localStorage` (5–10 MB) ni
+`PropertiesService` (9 KB por propiedad) admiten un PDF. Si en algún momento quieres los
+documentos dentro, el sitio natural en Apps Script es Google Drive: `DriveApp` puede guardar
+el archivo y devolver su identificador, y bastaría con añadir un campo `idDrive` a cada fuente
+en `assets/biblioteca.js`. No está implementado.
 
 **Migrar el progreso existente.** Antes de cambiar: `Ajustes → Exportar progreso` (copia un
 JSON). Después, en la versión de Apps Script: `Ajustes → Importar`.
@@ -130,6 +137,18 @@ google.script.run
 - [ ] El plan se regenera al cambiar la disponibilidad.
 - [ ] El Taller genera el prompt, valida un JSON pegado e importa el tema.
 - [ ] El contenido propio importado sigue ahí tras cerrar y volver a abrir la app.
+- [ ] Un simulacro se arma, se corrige, aparece en el historial y sus fallos aparecen como
+      brechas en Rendimiento.
+- [ ] El cronómetro del examen sigue corriendo con la pestaña en segundo plano y al volver
+      marca el tiempo real (usa marcas de tiempo, no un contador de intervalos).
+- [ ] Las diapositivas abren a pantalla completa dentro del iframe de Apps Script y responden
+      a las flechas del teclado. **Es el punto más frágil de la migración**: el iframe no
+      recibe las pulsaciones hasta que se hace clic dentro de él, así que hay que pulsar una
+      vez sobre la presentación antes de navegar con el teclado.
+- [ ] Una nota con `[[enlaces]]` crea la nota enlazada, genera retroenlaces y sobrevive a
+      recargar.
+- [ ] Una fuente con enlace externo abre en pestaña nueva (`target="_blank"`; el
+      `<base target="_top">` del `Index` no debe romperlo).
 - [ ] El botón de copiar el prompt funciona (algunos navegadores restringen el portapapeles
       dentro de iframes; existe un método alternativo con `execCommand` como respaldo).
 

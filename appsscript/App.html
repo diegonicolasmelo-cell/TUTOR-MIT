@@ -29,7 +29,11 @@ var Almacen = (function () {
       racha: { ultimoDia: null, dias: 0, mejor: 0 },
       /* Contenido creado por el usuario desde el Taller. Viaja con
          el progreso, de modo que se exporta e importa con él. */
-      contenido: { areas: [], modulos: [], temas: [] }
+      contenido: { areas: [], modulos: [], temas: [] },
+      examenes: [],
+      /* Segundo cerebro: fuentes consultadas y notas atómicas. */
+      fuentes: [],
+      notas: []
     };
   }
 
@@ -530,6 +534,60 @@ var Estado = (function () {
       };
     },
 
+    /* ---------- biblioteca de fuentes ---------- */
+    fuentes: function () { return d.fuentes || (d.fuentes = []); },
+
+    guardarFuente: function (f) {
+      var lista = Estado.fuentes();
+      var i = lista.findIndex(function (x) { return x.id === f.id; });
+      if (i >= 0) lista[i] = f; else lista.unshift(f);
+      persistir();
+      notificar();
+    },
+
+    eliminarFuente: function (id) {
+      d.fuentes = Estado.fuentes().filter(function (f) { return f.id !== id; });
+      persistir();
+      notificar();
+    },
+
+    fuentesDeTema: function (idTema) {
+      return Estado.fuentes().filter(function (f) {
+        return (f.temas || []).indexOf(idTema) >= 0;
+      });
+    },
+
+    /* ---------- notas atómicas ---------- */
+    notas: function () { return d.notas || (d.notas = []); },
+
+    guardarNota: function (n) {
+      var lista = Estado.notas();
+      var i = lista.findIndex(function (x) { return x.id === n.id; });
+      n.modificado = new Date().toISOString();
+      if (i >= 0) lista[i] = n;
+      else { n.creado = n.modificado; lista.unshift(n); }
+      persistir();
+      notificar();
+    },
+
+    eliminarNota: function (id) {
+      d.notas = Estado.notas().filter(function (n) { return n.id !== id; });
+      persistir();
+      notificar();
+    },
+
+    /* ---------- exámenes ---------- */
+    registrarExamen: function (resumen) {
+      if (!d.examenes) d.examenes = [];
+      d.examenes.unshift(resumen);
+      if (d.examenes.length > 60) d.examenes.length = 60;
+      Estado.registrarDia();
+      persistir();
+      notificar();
+    },
+
+    examenes: function () { return d.examenes || []; },
+
     /* ---------- contenido propio (Taller) ---------- */
     contenido: function () {
       if (!d.contenido) d.contenido = { areas: [], modulos: [], temas: [] };
@@ -804,50 +862,85 @@ var UI = (function () {
 
 
 /* ============================================================
-   Cronómetro reutilizable para las sesiones
+   Cronómetro reutilizable para las sesiones y el examen
+   ------------------------------------------------------------
+   Cuenta con MARCAS DE TIEMPO, no restando un segundo por cada
+   tic. La diferencia importa: los navegadores frenan los
+   temporizadores de las pestañas en segundo plano (llegan a un
+   tic por minuto), así que un contador por tics se atrasaría
+   durante un examen de 30 minutos si Diego cambia de pestaña.
+   Calculando contra Date.now(), el reloj de pantalla se corrige
+   solo al volver, y la entrega automática se dispara aunque el
+   tiempo se haya agotado con la pestaña oculta.
    ============================================================ */
 
 var Crono = (function () {
   var intervalo = null;
-  var restanteSeg = 0;
+  var finEn = 0;          /* marca de tiempo en que llega a cero  */
+  var restanteAlPausar = 0;
   var alCambiar = null;
   var alTerminar = null;
   var pausado = false;
+  var terminado = false;  /* alTerminar se dispara una sola vez   */
 
   function formatear(seg) {
     var m = Math.floor(Math.abs(seg) / 60), s = Math.abs(seg) % 60;
     return (seg < 0 ? '−' : '') + m + ':' + (s < 10 ? '0' : '') + s;
   }
 
-  function tic() {
-    if (pausado) return;
-    restanteSeg -= 1;
-    if (alCambiar) alCambiar(restanteSeg, formatear(restanteSeg));
-    if (restanteSeg === 0 && alTerminar) alTerminar();
+  function restante() {
+    if (pausado) return Math.round(restanteAlPausar / 1000);
+    return Math.round((finEn - Date.now()) / 1000);
+  }
+
+  function refrescar() {
+    if (pausado || !intervalo) return;
+    var seg = restante();
+    if (alCambiar) alCambiar(seg, formatear(seg));
+    /* Al volver de segundo plano el salto puede ser de minutos,
+       así que se comprueba <= 0 y no == 0. */
+    if (seg <= 0 && !terminado) {
+      terminado = true;
+      if (alTerminar) alTerminar();
+    }
+  }
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) refrescar();
+    });
   }
 
   return {
     iniciar: function (minutos, cambio, fin) {
       Crono.parar();
-      restanteSeg = Math.round(minutos * 60);
-      alCambiar = cambio; alTerminar = fin; pausado = false;
-      if (alCambiar) alCambiar(restanteSeg, formatear(restanteSeg));
-      intervalo = setInterval(tic, 1000);
+      finEn = Date.now() + Math.round(minutos * 60) * 1000;
+      alCambiar = cambio; alTerminar = fin;
+      pausado = false; terminado = false;
+      if (alCambiar) alCambiar(restante(), formatear(restante()));
+      intervalo = setInterval(refrescar, 1000);
     },
     alternarPausa: function () {
-      pausado = !pausado;
+      if (pausado) {
+        finEn = Date.now() + restanteAlPausar;
+        pausado = false;
+      } else {
+        restanteAlPausar = finEn - Date.now();
+        pausado = true;
+      }
       return pausado;
     },
     estaPausado: function () { return pausado; },
     parar: function () {
       if (intervalo) clearInterval(intervalo);
       intervalo = null;
+      pausado = false;
     },
     transcurridoMin: function (totalMin) {
-      return Math.max(0, Math.round(totalMin - restanteSeg / 60));
+      return Math.max(0, Math.round(totalMin - restante() / 60));
     },
     formatear: formatear,
-    restante: function () { return restanteSeg; }
+    restante: restante
   };
 })();
 
@@ -1339,6 +1432,8 @@ UI.registrar('inicio', {
         html += '<div class="fila"><div class="crece">' +
           '<div class="titulo">' + UI.esc(b.texto) + '</div>' +
           '<div class="sub">' + UI.esc(t ? t.nombre : '') + '</div></div>' +
+          '<button class="btn btn-s btn-fantasma" data-accion="nota-desde-brecha" data-tema="' + b.tema +
+          '" data-texto="' + UI.esc(b.texto) + '" title="Convertir en nota">✍️</button>' +
           '<button class="btn btn-s" data-accion="repasar-brecha" data-tema="' + b.tema + '">Repasar</button>' +
           '<button class="btn btn-s btn-fantasma" data-accion="cerrar-brecha" data-i="' + i + '">✓</button></div>';
       });
@@ -1437,6 +1532,7 @@ UI.registrar('temario', {
           '</div>' +
           UI.barra(d, d >= 70 ? 'ok' : d >= 40 ? 'alerta' : 'acento') +
           '</div>' +
+            '<button class="btn btn-s btn-fantasma" data-accion="presentar" data-tema="' + t.id + '" title="Modo presentación">🖥️</button>' +
             '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
             '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
             '</div>';
@@ -1514,7 +1610,8 @@ UI.registrar('tema', {
       UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
   },
   acciones: function (p) {
-    return '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
+    return '<button class="btn btn-s" data-accion="presentar" data-tema="' + p.tema + '">🖥️ Presentar</button>' +
+      '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
       '<button class="btn btn-primario btn-s" data-accion="estudiar-tema" data-tema="' + p.tema + '">Estudiar con el método</button>';
   },
   angosto: true,
@@ -1558,6 +1655,33 @@ UI.registrar('tema', {
     html += bloqueError(t.error);
 
     html += '<div class="aviso aviso-ok mt"><b>Perla de examen.</b> ' + t.perla + '</div>';
+
+    /* Segundo cerebro: qué has leído y qué has pensado sobre este tema */
+    var fuentes = Estado.fuentesDeTema(t.id);
+    var notas = typeof Notas !== 'undefined' ? Notas.deTema(t.id) : [];
+
+    if (fuentes.length || notas.length) {
+      html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Tu material sobre este tema</h3></div>';
+      fuentes.forEach(function (f) {
+        var tp = tipoFuente(f.tipo);
+        html += '<div class="fila"><div style="font-size:1.1rem">' + tp.icono + '</div>' +
+          '<div class="crece"><div class="titulo">' + UI.esc(f.titulo) + '</div>' +
+          '<div class="sub">' + UI.esc([f.autor, f.anio].filter(Boolean).join(' · ')) + '</div></div>' +
+          (f.enlace ? '<a class="btn btn-s btn-fantasma" href="' + UI.esc(f.enlace) +
+            '" target="_blank" rel="noopener noreferrer">Abrir ↗</a>' : '') + '</div>';
+      });
+      notas.forEach(function (n) {
+        html += '<div class="fila"><div style="font-size:1.1rem">🕸️</div>' +
+          '<div class="crece"><div class="titulo">' + UI.esc(n.titulo) + '</div>' +
+          '<div class="sub">Nota propia</div></div>' +
+          '<button class="btn btn-s btn-fantasma" data-accion="nota-abrir" data-id="' + n.id + '">Abrir</button></div>';
+      });
+      html += '</div>';
+    }
+
+    html += '<div class="linea fin mt">' +
+      '<button class="btn btn-s btn-fantasma" data-accion="nota-desde-brecha" data-tema="' + t.id +
+      '" data-texto="">✍️ Escribir una nota sobre este tema</button></div>';
 
     return html;
   }
@@ -2016,6 +2140,13 @@ var Taller = (function () {
     L.push('- **preguntas**: 6–9 en total, repartidas en nivel 1 (conocimiento), nivel 2 (integración) y nivel 3 (razonamiento clínico). Cada una con "q" y "r" completa.');
     L.push('- **caso**: una viñeta clínica realista y entre 5 y 7 "pasos", cada uno con "q" (pregunta socrática), "pista" y "r" (razonamiento completo). Más "cierre" con la lección del caso.');
     L.push('- **tarjetas**: 5–9 objetos con "f" (frente: pregunta o concepto) y "d" (dorso: respuesta autocontenida). Deben poder entenderse fuera de contexto.');
+    if (cfg.mcq) {
+      L.push('- **mcq** (preguntas de alternativa): 4–6 preguntas, cada una con "n" (nivel 1, 2 o 3), "q" (enunciado) y "o" (exactamente 4 opciones).');
+      L.push('  Cada opción lleva "t" (texto) y "r" (explicación), y **solo una** lleva además "ok": true.');
+      L.push('  REGLA CLAVE de los distractores: cada opción incorrecta debe ser un **error conceptual concreto y frecuente**, no relleno ni un absurdo evidente.');
+      L.push('  Su "r" debe explicar por qué resulta tentadora y por qué falla. La "r" de la correcta explica por qué lo es.');
+      L.push('  Un distractor bien elegido enseña tanto como la respuesta correcta; uno de relleno no enseña nada.');
+    }
     L.push('');
     L.push('## IDENTIFICADORES');
     L.push('Los campos "id" deben ir en minúsculas, sin acentos ni espacios, separados por guiones. Ejemplo: "cascada-coagulacion".');
@@ -2104,6 +2235,24 @@ var Taller = (function () {
         { f: '...', d: '...' }
       ]
     }];
+    if (cfg.mcq) {
+      salida.temas[0].mcq = [
+        { n: 1, q: 'enunciado', o: [
+          { t: 'opción incorrecta', r: 'qué error conceptual representa y por qué falla' },
+          { t: 'opción correcta', ok: true, r: 'por qué es la correcta' },
+          { t: 'opción incorrecta', r: '...' },
+          { t: 'opción incorrecta', r: '...' }
+        ] },
+        { n: 2, q: '...', o: [
+          { t: '...', r: '...' }, { t: '...', ok: true, r: '...' },
+          { t: '...', r: '...' }, { t: '...', r: '...' }
+        ] },
+        { n: 3, q: '...', o: [
+          { t: '...', r: '...' }, { t: '...', ok: true, r: '...' },
+          { t: '...', r: '...' }, { t: '...', r: '...' }
+        ] }
+      ];
+    }
     return salida;
   }
 
@@ -2310,6 +2459,34 @@ var Taller = (function () {
       }).filter(function (x) { return x.f && x.d; });
       if (t.tarjetas.length < 3) errores.push(ref + ': se necesitan al menos 3 tarjetas (hay ' + t.tarjetas.length + ').');
 
+      /* preguntas de alternativa (opcionales) */
+      t.mcq = [];
+      (bruto.mcq || []).forEach(function (m, k) {
+        var ref2 = ref + '.mcq[' + k + ']';
+        var enunciado = limpiarHtml(m.q);
+        var opciones = (m.o || []).map(function (o) {
+          var op = { t: limpiarTexto(o.t), r: limpiarTexto(o.r) };
+          if (o.ok === true || o.ok === 'true') op.ok = true;
+          return op;
+        }).filter(function (o) { return o.t; });
+
+        if (!enunciado) { avisos.push(ref2 + ': sin enunciado, se descarta.'); return; }
+        if (opciones.length < 3) { avisos.push(ref2 + ': menos de 3 opciones, se descarta.'); return; }
+
+        var correctas = opciones.filter(function (o) { return o.ok; }).length;
+        if (correctas !== 1) {
+          avisos.push(ref2 + ': tiene ' + correctas + ' opciones marcadas como correctas (debe haber exactamente 1). Se descarta.');
+          return;
+        }
+        var sinRazon = opciones.filter(function (o) { return !o.r; }).length;
+        if (sinRazon) {
+          avisos.push(ref2 + ': ' + sinRazon + ' opciones sin explicación. Se importa, pero la revisión será menos útil.');
+        }
+        var nivel = parseInt(m.n, 10);
+        if ([1, 2, 3].indexOf(nivel) < 0) nivel = 1;
+        t.mcq.push({ n: nivel, q: enunciado, o: opciones });
+      });
+
       /* Marcas de procedencia */
       t.propio = true;
       t.verificado = false;
@@ -2457,7 +2634,12 @@ UI.registrar('taller', {
       '<label class="campo"><span>Fuentes que usarás <span class="tenue">(opcional, se incluye en el prompt)</span></span>' +
       '<textarea id="t-fuentes" style="min-height:70px" placeholder="Apuntes de la cátedra, tema 4; guía de la unidad sobre anticoagulación; paper de Smith 2023 sobre CID"></textarea></label>' +
 
-      '<button class="btn btn-primario" data-accion="taller-generar">Generar prompt</button>' +
+      '<label class="fila" style="cursor:pointer;gap:9px;border:0;padding:4px 0">' +
+      '<input type="checkbox" id="t-mcq" checked style="width:auto;margin:0">' +
+      '<span class="crece"><b>Incluir preguntas de alternativa</b>' +
+      '<div class="sub">Se añaden al banco de simulacros, con la explicación de por qué falla cada distractor.</div></span></label>' +
+
+      '<button class="btn btn-primario mt" data-accion="taller-generar">Generar prompt</button>' +
       '</div>';
 
     /* --- paso 2: prompt --- */
@@ -3015,6 +3197,989 @@ UI.registrar('preparar', {
 
 
 /* ============================================================
+   EXAMEN — preguntas de alternativa con corrección automática
+   ------------------------------------------------------------
+   Simula la prueba real: cronómetro, navegación entre preguntas,
+   marcar para revisar y entrega con informe.
+
+   Lo que lo separa de un cuestionario cualquiera es la revisión:
+   cada distractor lleva escrito POR QUÉ es incorrecto, de modo
+   que un fallo enseña el error conceptual concreto que lo
+   provocó. Los temas fallados generan brechas y vuelven al plan.
+   ============================================================ */
+
+var Examen = (function () {
+  var e = null;   // examen en curso
+
+  function barajar(lista) {
+    var a = lista.slice();
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  /* ------------------------------------------------------------
+     Construcción del examen.
+     Se muestrea de los temas activos, priorizando los de menor
+     dominio y los de alto rendimiento: el examen debe atacar lo
+     flojo, no repartirse a ciegas.
+     ------------------------------------------------------------ */
+  function construir(cfg) {
+    var candidatos = [];
+
+    Estado.temasActivos().forEach(function (t) {
+      if (cfg.area && TUTOR.areaDeTema(t.id) !== cfg.area) return;
+      TUTOR.mcqDe(t.id).forEach(function (p, i) {
+        if (cfg.nivel && cfg.nivel !== 'todos' && String(p.n) !== String(cfg.nivel)) return;
+        candidatos.push({
+          ref: t.id + '#' + i,
+          tema: t.id,
+          area: TUTOR.areaDeTema(t.id),
+          n: p.n,
+          q: p.q,
+          o: p.o,
+          /* Menor dominio y alto rendimiento pesan más. */
+          peso: (100 - Estado.dominio(t.id)) + (t.alto ? 30 : 0) + Math.random() * 25
+        });
+      });
+    });
+
+    if (!candidatos.length) return null;
+
+    candidatos.sort(function (a, b) { return b.peso - a.peso; });
+    var elegidas = candidatos.slice(0, cfg.preguntas);
+
+    /* Se baraja el orden de las preguntas y el de sus opciones,
+       para que no se memorice la posición de la correcta. */
+    return barajar(elegidas).map(function (p) {
+      return {
+        ref: p.ref, tema: p.tema, area: p.area, n: p.n, q: p.q,
+        opciones: barajar(p.o),
+        respuesta: null,
+        marcada: false
+      };
+    });
+  }
+
+  function iniciar(cfg) {
+    var preguntas = construir(cfg);
+    if (!preguntas || !preguntas.length) {
+      UI.brindis('No hay preguntas disponibles con esos filtros');
+      return false;
+    }
+    e = {
+      cfg: cfg,
+      preguntas: preguntas,
+      indice: 0,
+      inicio: Date.now(),
+      entregado: false,
+      resultado: null
+    };
+    UI.ir('examen');
+    Crono.iniciar(cfg.minutos, function (seg, txt) {
+      var el = UI.$('#crono-examen');
+      if (!el) return;
+      el.textContent = txt;
+      el.className = 'cronometro' + (seg < 0 ? ' critico' : seg < 120 ? ' aviso' : '');
+    }, function () {
+      UI.brindis('Se acabó el tiempo · entrega automática');
+      entregar();
+    });
+    return true;
+  }
+
+  function responder(indicePregunta, indiceOpcion) {
+    e.preguntas[indicePregunta].respuesta = indiceOpcion;
+  }
+
+  function marcar(indicePregunta) {
+    var p = e.preguntas[indicePregunta];
+    p.marcada = !p.marcada;
+  }
+
+  function ir(indice) {
+    e.indice = Math.max(0, Math.min(e.preguntas.length - 1, indice));
+    UI.refrescar();
+    window.scrollTo(0, 0);
+  }
+
+  /* ------------------------------------------------------------
+     Corrección
+     ------------------------------------------------------------ */
+  function entregar() {
+    if (!e || e.entregado) return;
+    Crono.parar();
+    e.entregado = true;
+
+    var porArea = {}, porNivel = { 1: { ok: 0, n: 0 }, 2: { ok: 0, n: 0 }, 3: { ok: 0, n: 0 } };
+    var aciertos = 0, sinResponder = 0;
+    var temasFallados = {};
+
+    e.preguntas.forEach(function (p) {
+      var elegida = p.respuesta === null ? null : p.opciones[p.respuesta];
+      var correcta = elegida && elegida.ok === true;
+      p.correcta = correcta;
+      if (p.respuesta === null) sinResponder++;
+      if (correcta) aciertos++;
+
+      if (!porArea[p.area]) porArea[p.area] = { ok: 0, n: 0 };
+      porArea[p.area].n++;
+      if (correcta) porArea[p.area].ok++;
+
+      porNivel[p.n].n++;
+      if (correcta) porNivel[p.n].ok++;
+
+      /* Cada respuesta alimenta el dominio del tema, igual que
+         las preguntas abiertas de una sesión. */
+      Estado.registrarRespuesta(p.tema, correcta);
+
+      if (!correcta) {
+        temasFallados[p.tema] = (temasFallados[p.tema] || 0) + 1;
+      }
+    });
+
+    /* Los fallos se convierten en brechas: es información, no castigo. */
+    Object.keys(temasFallados).forEach(function (idTema) {
+      Estado.anotarBrecha(idTema, 'Examen: ' + temasFallados[idTema] +
+        (temasFallados[idTema] === 1 ? ' pregunta fallada' : ' preguntas falladas'));
+    });
+
+    var minutos = Math.max(1, Math.round((Date.now() - e.inicio) / 60000));
+    e.resultado = {
+      aciertos: aciertos,
+      total: e.preguntas.length,
+      sinResponder: sinResponder,
+      porcentaje: Math.round((aciertos / e.preguntas.length) * 100),
+      porArea: porArea,
+      porNivel: porNivel,
+      minutos: minutos
+    };
+
+    Estado.registrarExamen({
+      fecha: new Date().toISOString(),
+      preguntas: e.preguntas.length,
+      aciertos: aciertos,
+      minutos: minutos,
+      area: e.cfg.area || null
+    });
+
+    UI.refrescar();
+    window.scrollTo(0, 0);
+  }
+
+  function abandonar() {
+    Crono.parar();
+    e = null;
+    UI.ir('inicio');
+  }
+
+  /* ------------------------------------------------------------
+     RENDER
+     ------------------------------------------------------------ */
+  function cabecera() {
+    var respondidas = e.preguntas.filter(function (p) { return p.respuesta !== null; }).length;
+    return '<div class="sesion-cab">' +
+      '<div><div class="sm tenue">Examen · ' + e.preguntas.length + ' preguntas</div>' +
+      '<div style="font-weight:650">' + respondidas + ' respondidas</div></div>' +
+      '<div class="pasos-sesion">' +
+      e.preguntas.map(function (p, i) {
+        return '<div class="paso-sesion ' +
+          (p.respuesta !== null ? 'hecho' : '') + (i === e.indice ? ' actual' : '') + '"></div>';
+      }).join('') +
+      '</div>' +
+      '<div class="cronometro" id="crono-examen">--:--</div>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="examen-abandonar">Salir</button>' +
+      '</div>';
+  }
+
+  function renderPregunta() {
+    var p = e.preguntas[e.indice];
+    var nombresNivel = { 1: 'Conocimiento', 2: 'Integración', 3: 'Razonamiento clínico' };
+
+    var html = cabecera();
+
+    html += '<div class="tarjeta">' +
+      '<div class="linea entre" style="margin-bottom:10px">' +
+      '<span class="etiq">Pregunta ' + (e.indice + 1) + ' de ' + e.preguntas.length + '</span>' +
+      '<span class="etiq etiq-info">' + nombresNivel[p.n] + '</span>' +
+      '</div>' +
+      '<div class="enunciado" style="font-size:1.06rem;font-weight:600;margin-bottom:16px">' + p.q + '</div>' +
+      '<div class="alternativas">';
+
+    p.opciones.forEach(function (o, i) {
+      html += '<button class="alternativa' + (p.respuesta === i ? ' sel' : '') + '" ' +
+        'data-accion="examen-responder" data-i="' + i + '">' +
+        '<span class="letra">' + String.fromCharCode(65 + i) + '</span>' +
+        '<span class="texto">' + UI.esc(o.t) + '</span></button>';
+    });
+
+    html += '</div>' +
+      '<div class="linea entre mt">' +
+      '<button class="btn btn-s btn-fantasma" data-accion="examen-marcar">' +
+      (p.marcada ? '★ Marcada para revisar' : '☆ Marcar para revisar') + '</button>' +
+      '<div class="linea">' +
+      (e.indice > 0 ? '<button class="btn btn-s" data-accion="examen-ir" data-i="' + (e.indice - 1) + '">← Anterior</button>' : '') +
+      (e.indice < e.preguntas.length - 1
+        ? '<button class="btn btn-s btn-primario" data-accion="examen-ir" data-i="' + (e.indice + 1) + '">Siguiente →</button>'
+        : '<button class="btn btn-s btn-acento" data-accion="examen-entregar">Entregar</button>') +
+      '</div></div></div>';
+
+    /* Mapa de navegación */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Todas las preguntas</h3>' +
+      '<div class="der"><button class="btn btn-s btn-acento" data-accion="examen-entregar">Entregar examen</button></div></div>' +
+      '<div class="mapa-preguntas">' +
+      e.preguntas.map(function (q, i) {
+        var clase = 'casilla' + (q.respuesta !== null ? ' respondida' : '') +
+          (q.marcada ? ' marcada' : '') + (i === e.indice ? ' actual' : '');
+        return '<button class="' + clase + '" data-accion="examen-ir" data-i="' + i + '">' + (i + 1) + '</button>';
+      }).join('') +
+      '</div>' +
+      '<p class="sm tenue mt mb0">Puedes volver atrás y cambiar respuestas antes de entregar. ' +
+      'Las marcadas aparecen con borde para localizarlas rápido.</p>' +
+      '</div>';
+
+    return html;
+  }
+
+  function renderResultado() {
+    var r = e.resultado;
+    var aprobado = r.porcentaje >= 60;
+
+    var html = '<div class="tarjeta centro">' +
+      '<div style="font-size:2.6rem">' + (r.porcentaje >= 80 ? '🎯' : aprobado ? '✅' : '📌') + '</div>' +
+      '<div class="metrica" style="align-items:center">' +
+      '<span class="valor" style="font-size:3rem">' + r.porcentaje + '%</span>' +
+      '<span class="nota">' + r.aciertos + ' de ' + r.total + ' correctas · ' + r.minutos + ' min' +
+      (r.sinResponder ? ' · ' + r.sinResponder + ' sin responder' : '') + '</span></div>' +
+      UI.barra(r.porcentaje, r.porcentaje >= 70 ? 'ok' : r.porcentaje >= 50 ? 'alerta' : 'acento') +
+      '</div>';
+
+    /* Desglose por nivel: dice QUÉ tipo de fallo tienes */
+    html += '<div class="rejilla c3 mt">';
+    var nombresNivel = { 1: 'Conocimiento', 2: 'Integración', 3: 'Razonamiento' };
+    [1, 2, 3].forEach(function (n) {
+      var d = r.porNivel[n];
+      var pct = d.n ? Math.round((d.ok / d.n) * 100) : null;
+      html += '<div class="tarjeta"><div class="metrica">' +
+        '<span class="rotulo">' + nombresNivel[n] + '</span>' +
+        '<span class="valor">' + (pct === null ? '—' : pct + '%') + '</span>' +
+        '<span class="nota">' + d.ok + ' de ' + d.n + '</span>' +
+        (pct === null ? '' : UI.barra(pct, pct >= 70 ? 'ok' : 'alerta')) +
+        '</div></div>';
+    });
+    html += '</div>';
+
+    /* Desglose por área */
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Por área</h3></div>';
+    Object.keys(r.porArea).forEach(function (idArea) {
+      var a = TUTOR.area(idArea);
+      var d = r.porArea[idArea];
+      var pct = Math.round((d.ok / d.n) * 100);
+      html += '<div class="fila"><div style="font-size:1.15rem">' + (a ? a.icono : '📗') + '</div>' +
+        '<div class="crece"><div class="titulo">' + UI.esc(a ? a.nombre : idArea) + '</div>' +
+        UI.barra(pct, pct >= 70 ? 'ok' : 'alerta') + '</div>' +
+        '<div class="sm tenue">' + d.ok + '/' + d.n + '</div></div>';
+    });
+    html += '</div>';
+
+    /* Interpretación honesta del resultado */
+    var lectura;
+    var n3 = r.porNivel[3], n1 = r.porNivel[1];
+    if (n3.n && n1.n && (n1.ok / n1.n) - (n3.ok / n3.n) > 0.3) {
+      lectura = 'Tienes los datos pero fallas al aplicarlos: la diferencia entre nivel 1 y nivel 3 es grande. ' +
+        'No necesitas releer, necesitas más casos clínicos.';
+    } else if (n1.n && (n1.ok / n1.n) < 0.6) {
+      lectura = 'Los fallos empiezan en el nivel básico, así que el problema no es de razonamiento sino de base. ' +
+        'Vuelve a los temas con menor dominio en modo comprender.';
+    } else if (r.porcentaje >= 80) {
+      lectura = 'Resultado sólido y repartido. Este es el momento de subir el nivel de dificultad o de profundizar, ' +
+        'no de repetir lo que ya dominas.';
+    } else {
+      lectura = 'Resultado intermedio: revisa abajo cada fallo con su explicación. ' +
+        'Los temas fallados ya se han registrado como brechas y volverán a tu plan.';
+    }
+    html += '<div class="aviso mt"><b>Lectura del resultado.</b> ' + lectura + '</div>';
+
+    /* Revisión pregunta a pregunta */
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Revisión</h3>' +
+      '<div class="der sm tenue">Cada opción explica por qué</div></div></div>';
+
+    e.preguntas.forEach(function (p, i) {
+      var elegida = p.respuesta === null ? null : p.respuesta;
+      html += '<div class="tarjeta revision ' + (p.correcta ? 'ok' : 'mal') + '">' +
+        '<div class="linea entre" style="margin-bottom:8px">' +
+        '<span class="etiq ' + (p.correcta ? 'etiq-ok' : 'etiq-acento') + '">' +
+        (p.correcta ? '✓ Correcta' : elegida === null ? '— Sin responder' : '✗ Fallada') + '</span>' +
+        '<span class="sm tenue">' + (i + 1) + ' · ' + UI.esc((TUTOR.tema(p.tema) || {}).nombre || '') + '</span>' +
+        '</div>' +
+        '<div class="enunciado" style="font-weight:600;margin-bottom:10px">' + p.q + '</div>';
+
+      p.opciones.forEach(function (o, k) {
+        var esCorrecta = o.ok === true;
+        var esElegida = elegida === k;
+        var clase = 'opcion-revision' + (esCorrecta ? ' correcta' : '') + (esElegida && !esCorrecta ? ' elegida' : '');
+        html += '<div class="' + clase + '">' +
+          '<div class="cab-op"><span class="letra">' + String.fromCharCode(65 + k) + '</span>' +
+          '<span class="texto">' + UI.esc(o.t) + '</span>' +
+          (esCorrecta ? '<span class="etiq etiq-ok">correcta</span>' : '') +
+          (esElegida && !esCorrecta ? '<span class="etiq etiq-acento">tu respuesta</span>' : '') +
+          '</div>' +
+          '<div class="razon">' + UI.esc(o.r) + '</div></div>';
+      });
+
+      html += '<div class="linea fin mt">' +
+        '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + p.tema + '">Ver el tema</button>' +
+        '</div></div>';
+    });
+
+    html += '<div class="linea fin mt">' +
+      '<button class="btn" data-accion="ir-inicio">Volver al inicio</button>' +
+      '<button class="btn btn-primario" data-accion="navegar" data-ruta="preparar-examen">Otro examen</button>' +
+      '</div>';
+
+    return html;
+  }
+
+  function render() {
+    if (!e) return '<div class="vacio">No hay examen activo.</div>';
+    return e.entregado ? renderResultado() : renderPregunta();
+  }
+
+  return {
+    iniciar: iniciar, render: render, entregar: entregar, abandonar: abandonar,
+    responder: responder, marcar: marcar, ir: ir,
+    activo: function () { return !!e; },
+    datos: function () { return e; }
+  };
+})();
+
+
+/* ------------------------------------------------------------
+   VISTAS
+   ------------------------------------------------------------ */
+
+UI.registrar('preparar-examen', {
+  titulo: 'Simulacro de examen',
+  sub: function () {
+    return TUTOR.totalMcq() + ' preguntas de alternativa disponibles';
+  },
+  angosto: true,
+  render: function () {
+    var disponibles = TUTOR.totalMcq();
+    if (!disponibles) {
+      return '<div class="tarjeta"><div class="vacio"><span class="emoji">📝</span>' +
+        'Todavía no hay preguntas de alternativa.<br>' +
+        '<span class="sm">Puedes generarlas desde el Taller a partir de tus propias fuentes.</span>' +
+        '<div class="mt"><button class="btn btn-primario" data-accion="navegar" data-ruta="taller">Ir al Taller</button></div>' +
+        '</div></div>';
+    }
+
+    var areas = '<option value="">Todas las áreas activas</option>' +
+      TUTOR.AREAS.filter(function (a) { return Estado.areaActiva(a.id); }).map(function (a) {
+        var n = TUTOR.temasDeArea(a.id).reduce(function (s, t) { return s + TUTOR.mcqDe(t.id).length; }, 0);
+        if (!n) return '';
+        return '<option value="' + a.id + '">' + a.icono + ' ' + UI.esc(a.nombre) + ' (' + n + ')</option>';
+      }).join('');
+
+    var html = '<div class="tarjeta">' +
+      '<p class="sm tenue">Un simulacro no sirve solo para medir: <b>hacer el examen es en sí una de las formas ' +
+      'más eficaces de estudiar</b>. Recuperar bajo presión de tiempo consolida más que releer, y los fallos ' +
+      'señalan exactamente dónde volver. Al terminar verás por qué cada alternativa incorrecta lo era.</p>' +
+
+      '<div class="rejilla c2">' +
+      '<label class="campo"><span>Duración</span><select id="x-minutos">' +
+      [10, 20, 30, 45, 60].map(function (m) {
+        return '<option value="' + m + '"' + (m === 30 ? ' selected' : '') + '>' + m + ' minutos</option>';
+      }).join('') + '</select></label>' +
+
+      '<label class="campo"><span>Número de preguntas</span><select id="x-preguntas">' +
+      [5, 10, 15, 20, 30].map(function (n) {
+        return '<option value="' + n + '"' + (n === 15 ? ' selected' : '') + '>' + n + ' preguntas</option>';
+      }).join('') + '</select></label>' +
+      '</div>' +
+
+      '<div class="rejilla c2">' +
+      '<label class="campo"><span>Área</span><select id="x-area">' + areas + '</select></label>' +
+      '<label class="campo"><span>Nivel</span><select id="x-nivel">' +
+      '<option value="todos">Todos los niveles</option>' +
+      '<option value="1">Solo conocimiento</option>' +
+      '<option value="2">Solo integración</option>' +
+      '<option value="3">Solo razonamiento clínico</option>' +
+      '</select></label>' +
+      '</div>' +
+
+      '<div class="aviso"><b>Cómo se eligen las preguntas.</b> No al azar: pesan más los temas con ' +
+      'menor dominio y los de alto rendimiento. El examen ataca lo flojo. Además se baraja el orden de las ' +
+      'opciones, para que no se memorice la posición de la correcta.</div>' +
+
+      '<button class="btn btn-primario btn-g btn-bloque" data-accion="examen-iniciar">Comenzar examen ▶</button>' +
+      '</div>';
+
+    /* Historial */
+    var historial = Estado.examenes();
+    if (historial.length) {
+      html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Exámenes anteriores</h3></div>';
+      historial.slice(0, 8).forEach(function (x) {
+        var pct = Math.round((x.aciertos / x.preguntas) * 100);
+        var a = x.area ? TUTOR.area(x.area) : null;
+        html += '<div class="fila"><div class="crece">' +
+          '<div class="titulo">' + (a ? a.icono + ' ' + UI.esc(a.nombre) : 'Todas las áreas') + '</div>' +
+          '<div class="sub">' + UI.fechaCorta(x.fecha.slice(0, 10)) + ' · ' + x.preguntas + ' preguntas · ' + x.minutos + ' min</div></div>' +
+          '<span class="etiq ' + (pct >= 70 ? 'etiq-ok' : pct >= 50 ? 'etiq-alerta' : 'etiq-acento') + '">' + pct + '%</span>' +
+          '</div>';
+      });
+      html += '</div>';
+    }
+
+    return html;
+  }
+});
+
+UI.registrar('examen', {
+  titulo: function () {
+    return Examen.activo() && Examen.datos().entregado ? 'Resultado del examen' : 'Examen en curso';
+  },
+  sub: function () {
+    if (!Examen.activo()) return '';
+    var e = Examen.datos();
+    return e.entregado ? 'Revisa cada pregunta: los distractores explican el error'
+      : e.cfg.preguntas + ' preguntas · ' + e.cfg.minutos + ' minutos';
+  },
+  angosto: true,
+  render: function () { return Examen.render(); }
+});
+
+
+/* ============================================================
+   DIAPOSITIVAS — modo presentación de un tema
+   ------------------------------------------------------------
+   Construye la presentación a partir del mismo contenido que ya
+   tiene el tema: no hay material duplicado que mantener.
+
+   Sirve para tres cosas distintas: repasar en pantalla completa
+   sin distracciones, proyectar el tema en una sesión clínica, y
+   pasar el contenido en el móvil con el pulgar.
+   ============================================================ */
+
+var Diapositivas = (function () {
+  var d = null;   // presentación activa
+
+  /* ------------------------------------------------------------
+     Construcción: cada pieza del tema es una diapositiva.
+     ------------------------------------------------------------ */
+  function construir(tema, soloEsenciales) {
+    var s = [];
+
+    s.push({
+      tipo: 'portada',
+      titulo: tema.nombre,
+      cuerpo: '<p class="idea">' + tema.ideaCentral + '</p>',
+      pie: (TUTOR.area(TUTOR.areaDeTema(tema.id)) || {}).nombre || ''
+    });
+
+    var bloques = tema.bloques.filter(function (b) {
+      return soloEsenciales ? b.nivel === 'imprescindible' : true;
+    });
+
+    bloques.forEach(function (b) {
+      s.push({
+        tipo: 'bloque',
+        etiqueta: TUTOR.NIVELES[b.nivel].nombre,
+        titulo: b.titulo,
+        cuerpo: (b.html || '') + UI.cadena(b.cadena) + UI.esquema(b.esquema)
+      });
+    });
+
+    if (tema.variables && tema.variables.length) {
+      s.push({
+        tipo: 'variables',
+        etiqueta: 'Variables clave',
+        titulo: '¿Qué se mueve y en qué dirección?',
+        cuerpo: UI.variables(tema.variables)
+      });
+    }
+
+    if (!soloEsenciales) {
+      if (tema.fisiopatologia) {
+        s.push({ tipo: 'bloque', etiqueta: 'Fisiopatología', titulo: 'Cuando el sistema se altera', cuerpo: tema.fisiopatologia });
+      }
+      if (tema.clinica) {
+        s.push({ tipo: 'bloque', etiqueta: 'Correlación clínica', titulo: 'Cómo se manifiesta', cuerpo: tema.clinica });
+      }
+    }
+
+    if (tema.error) {
+      s.push({
+        tipo: 'error',
+        etiqueta: 'Error frecuente',
+        titulo: tema.error.confunde,
+        cuerpo: '<p><b>Por qué se parecen:</b> ' + tema.error.parecido + '</p>' +
+          '<p><b>La diferencia real:</b> ' + tema.error.diferencia + '</p>' +
+          '<div class="regla">🧭 ' + tema.error.regla + '</div>'
+      });
+    }
+
+    s.push({ tipo: 'perla', etiqueta: 'Perla de examen', titulo: '', cuerpo: tema.perla });
+
+    /* Cierre útil: en qué se convierte esto al salir. */
+    s.push({
+      tipo: 'cierre',
+      titulo: '¿Y ahora?',
+      cuerpo: '<p>Las diapositivas son <b>reconocimiento</b>: pasarlas se siente fluido y por eso engaña. ' +
+        'Lo que fija la memoria es <b>recuperar</b>.</p>' +
+        '<p>Cierra esto y responde las preguntas del tema, o pasa sus tarjetas.</p>',
+      tema: tema.id
+    });
+
+    return s;
+  }
+
+  function abrir(idTema, soloEsenciales) {
+    var tema = TUTOR.tema(idTema);
+    if (!tema) return;
+    d = { tema: tema, slides: construir(tema, soloEsenciales), i: 0, esenciales: !!soloEsenciales };
+    pintar();
+    document.addEventListener('keydown', teclado);
+  }
+
+  function cerrar() {
+    d = null;
+    document.removeEventListener('keydown', teclado);
+    var el = UI.$('#presentacion');
+    if (el) el.remove();
+  }
+
+  function mover(delta) {
+    if (!d) return;
+    var nuevo = d.i + delta;
+    if (nuevo < 0 || nuevo >= d.slides.length) return;
+    d.i = nuevo;
+    pintar();
+  }
+
+  function irA(indice) {
+    if (!d) return;
+    d.i = Math.max(0, Math.min(d.slides.length - 1, indice));
+    pintar();
+  }
+
+  function teclado(ev) {
+    if (!d) return;
+    if (ev.key === 'ArrowRight' || ev.key === ' ' || ev.key === 'PageDown') { ev.preventDefault(); mover(1); }
+    else if (ev.key === 'ArrowLeft' || ev.key === 'PageUp') { ev.preventDefault(); mover(-1); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); cerrar(); }
+    else if (ev.key === 'Home') { ev.preventDefault(); irA(0); }
+    else if (ev.key === 'End') { ev.preventDefault(); irA(d.slides.length - 1); }
+  }
+
+  function pintar() {
+    var s = d.slides[d.i];
+    var progreso = ((d.i + 1) / d.slides.length) * 100;
+
+    var html =
+      '<div class="pres-barra"><i style="width:' + progreso + '%"></i></div>' +
+
+      '<div class="pres-sup">' +
+      '<span class="sm tenue">' + UI.esc(d.tema.nombre) + '</span>' +
+      '<span class="crece"></span>' +
+      '<span class="sm tenue">' + (d.i + 1) + ' / ' + d.slides.length + '</span>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="pres-cerrar" aria-label="Cerrar presentación">✕ Salir</button>' +
+      '</div>' +
+
+      '<div class="pres-cuerpo slide-' + s.tipo + '">' +
+      '<div class="pres-caja">' +
+      (s.etiqueta ? '<div class="pres-etiqueta">' + UI.esc(s.etiqueta) + '</div>' : '') +
+      (s.titulo ? '<h2>' + UI.esc(s.titulo) + '</h2>' : '') +
+      '<div class="doc">' + s.cuerpo + '</div>' +
+      (s.tipo === 'cierre'
+        ? '<div class="linea mt">' +
+          '<button class="btn btn-primario" data-accion="pres-estudiar" data-tema="' + s.tema + '">Ir a las preguntas</button>' +
+          '<button class="btn" data-accion="pres-tarjetas" data-tema="' + s.tema + '">Pasar sus tarjetas</button>' +
+          '</div>'
+        : '') +
+      '</div></div>' +
+
+      '<div class="pres-inf">' +
+      '<button class="btn btn-s" data-accion="pres-mover" data-d="-1"' + (d.i === 0 ? ' disabled' : '') + '>← Anterior</button>' +
+      '<div class="pres-puntos">' +
+      d.slides.map(function (_, k) {
+        return '<button class="punto' + (k === d.i ? ' actual' : '') + '" data-accion="pres-ir" data-i="' + k + '" ' +
+          'aria-label="Diapositiva ' + (k + 1) + '"></button>';
+      }).join('') +
+      '</div>' +
+      '<button class="btn btn-s btn-primario" data-accion="pres-mover" data-d="1"' +
+      (d.i === d.slides.length - 1 ? ' disabled' : '') + '>Siguiente →</button>' +
+      '</div>' +
+
+      '<div class="pres-ayuda sm tenue">← → para navegar · Esc para salir</div>';
+
+    var el = UI.$('#presentacion');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'presentacion';
+      el.className = 'presentacion';
+      document.body.appendChild(el);
+    }
+    el.innerHTML = html;
+    var cuerpo = UI.$('.pres-cuerpo');
+    if (cuerpo) cuerpo.scrollTop = 0;
+  }
+
+  return {
+    abrir: abrir, cerrar: cerrar, mover: mover, irA: irA,
+    activa: function () { return !!d; },
+    datos: function () { return d; }
+  };
+})();
+
+
+/* ============================================================
+   BIBLIOTECA Y NOTAS — la parte de «segundo cerebro»
+   ------------------------------------------------------------
+   Dos piezas complementarias al resto de la app:
+
+   · BIBLIOTECA: las fuentes que usas de verdad (papers, guías,
+     apuntes, capítulos), enlazadas a los temas que las citan.
+     No almacena archivos —no cabrían— sino referencias con su
+     enlace, de modo que sepas siempre de dónde salió algo.
+
+   · NOTAS: notas atómicas enlazadas entre sí con [[dobles
+     corchetes]], al estilo Zettelkasten. Una nota = una idea.
+     La estructura emerge de los enlaces, no de una jerarquía.
+
+   Por qué conviven con el temario jerárquico: el temario sirve
+   para NO OLVIDAR lo que ya entendiste; las notas sirven para
+   PENSAR y conectar entre áreas. Son objetivos distintos y por
+   eso son herramientas distintas.
+   ============================================================ */
+
+var Notas = (function () {
+
+  function idNuevo(prefijo) {
+    return prefijo + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  function normalizar(t) {
+    return String(t || '').trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+
+  /* ------------------------------------------------------------
+     Enlaces [[así]]: el mecanismo que hace emerger la estructura.
+     ------------------------------------------------------------ */
+  function extraerEnlaces(cuerpo) {
+    var salida = [];
+    var re = /\[\[([^\]]+)\]\]/g;
+    var m;
+    while ((m = re.exec(String(cuerpo || ''))) !== null) {
+      var t = m[1].trim();
+      if (t && salida.indexOf(t) < 0) salida.push(t);
+    }
+    return salida;
+  }
+
+  function porTitulo(titulo) {
+    var n = normalizar(titulo);
+    return Estado.notas().filter(function (x) { return normalizar(x.titulo) === n; })[0] || null;
+  }
+
+  /* Renderiza el cuerpo convirtiendo [[enlaces]] en botones.
+     Los que no existen todavía aparecen punteados y ofrecen
+     crearlos: escribir el enlace antes que la nota es
+     precisamente cómo crece un Zettelkasten. */
+  function render(cuerpo) {
+    var texto = UI.esc(cuerpo || '');
+    texto = texto.replace(/\[\[([^\]]+)\]\]/g, function (_, titulo) {
+      var t = titulo.trim();
+      var destino = porTitulo(t);
+      if (destino) {
+        return '<button class="enlace-nota" data-accion="nota-abrir" data-id="' + destino.id + '">' +
+          UI.esc(t) + '</button>';
+      }
+      return '<button class="enlace-nota vacio" data-accion="nota-crear-desde" data-titulo="' +
+        UI.esc(t) + '">' + UI.esc(t) + ' +</button>';
+    });
+    return texto.replace(/\n/g, '<br>');
+  }
+
+  /* Notas que enlazan a una dada: el valor real del sistema no
+     está en los enlaces que pones, sino en los que descubres. */
+  function retroenlaces(nota) {
+    return Estado.notas().filter(function (x) {
+      if (x.id === nota.id) return false;
+      return extraerEnlaces(x.cuerpo).some(function (t) {
+        return normalizar(t) === normalizar(nota.titulo);
+      });
+    });
+  }
+
+  function huerfanas() {
+    return Estado.notas().filter(function (n) {
+      return extraerEnlaces(n.cuerpo).length === 0 && retroenlaces(n).length === 0;
+    });
+  }
+
+  function buscar(termino) {
+    var q = normalizar(termino);
+    if (!q) return Estado.notas();
+    return Estado.notas().filter(function (n) {
+      return normalizar(n.titulo).indexOf(q) >= 0 || normalizar(n.cuerpo).indexOf(q) >= 0;
+    });
+  }
+
+  function deTema(idTema) {
+    return Estado.notas().filter(function (n) {
+      return (n.temas || []).indexOf(idTema) >= 0;
+    });
+  }
+
+  return {
+    idNuevo: idNuevo, extraerEnlaces: extraerEnlaces, porTitulo: porTitulo,
+    render: render, retroenlaces: retroenlaces, huerfanas: huerfanas,
+    buscar: buscar, deTema: deTema, normalizar: normalizar
+  };
+})();
+
+
+var TIPOS_FUENTE = [
+  { id: 'paper', nombre: 'Paper', icono: '📄' },
+  { id: 'guia', nombre: 'Guía clínica', icono: '📋' },
+  { id: 'libro', nombre: 'Libro o capítulo', icono: '📕' },
+  { id: 'apunte', nombre: 'Apunte propio', icono: '✍️' },
+  { id: 'clase', nombre: 'Clase o sesión', icono: '🎓' }
+];
+
+function tipoFuente(id) {
+  return TIPOS_FUENTE.filter(function (t) { return t.id === id; })[0] || TIPOS_FUENTE[0];
+}
+
+
+/* ============================================================
+   VISTA — Biblioteca de fuentes
+   ============================================================ */
+
+UI.registrar('biblioteca', {
+  titulo: 'Biblioteca',
+  sub: function () {
+    var n = Estado.fuentes().length;
+    return n ? n + (n === 1 ? ' fuente registrada' : ' fuentes registradas')
+      : 'Registra de dónde sale lo que estudias';
+  },
+  angosto: true,
+
+  render: function () {
+    var fuentes = Estado.fuentes();
+
+    var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>Añadir fuente</h3></div>' +
+      '<p class="sm tenue">La app no guarda archivos —no cabrían en el almacenamiento— sino la ' +
+      '<b>referencia y su enlace</b>. Lo importante es poder volver al documento y saber qué temas dependen de él.</p>' +
+
+      '<label class="campo"><span>Título</span>' +
+      '<input type="text" id="f-titulo" placeholder="Ventilación protectora en SDRA — guía de la unidad"></label>' +
+
+      '<div class="rejilla c3">' +
+      '<label class="campo"><span>Tipo</span><select id="f-tipo">' +
+      TIPOS_FUENTE.map(function (t) {
+        return '<option value="' + t.id + '">' + t.icono + ' ' + t.nombre + '</option>';
+      }).join('') + '</select></label>' +
+      '<label class="campo"><span>Autor</span><input type="text" id="f-autor" placeholder="Amato et al."></label>' +
+      '<label class="campo"><span>Año</span><input type="text" id="f-anio" placeholder="2015"></label>' +
+      '</div>' +
+
+      '<label class="campo"><span>Enlace <span class="tenue">(Drive, DOI, PubMed…)</span></span>' +
+      '<input type="text" id="f-enlace" placeholder="https://doi.org/…"></label>' +
+
+      '<label class="campo"><span>Temas que la usan</span>' +
+      '<select id="f-temas" multiple size="5">' +
+      TUTOR.AREAS.map(function (a) {
+        var temas = TUTOR.temasDeArea(a.id);
+        if (!temas.length) return '';
+        return '<optgroup label="' + a.icono + ' ' + UI.esc(a.nombre) + '">' +
+          temas.map(function (t) {
+            return '<option value="' + t.id + '">' + UI.esc(t.nombre) + '</option>';
+          }).join('') + '</optgroup>';
+      }).join('') + '</select>' +
+      '<span class="sm tenue">Ctrl o ⌘ para seleccionar varios</span></label>' +
+
+      '<button class="btn btn-primario" data-accion="fuente-guardar">Añadir a la biblioteca</button>' +
+      '</div>';
+
+    if (!fuentes.length) {
+      html += '<div class="tarjeta mt"><div class="vacio"><span class="emoji">📚</span>' +
+        'La biblioteca está vacía.<br><span class="sm">Cada fuente que registres aparecerá también ' +
+        'en la ficha de los temas que la citan.</span></div></div>';
+      return html;
+    }
+
+    /* Agrupadas por tipo */
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Tus fuentes</h3>' +
+      '<div class="der"><span class="etiq etiq-info">' + fuentes.length + '</span></div></div>';
+
+    TIPOS_FUENTE.forEach(function (tipo) {
+      var deEste = fuentes.filter(function (f) { return f.tipo === tipo.id; });
+      if (!deEste.length) return;
+      html += '<div class="sm tenue mt" style="font-weight:700;text-transform:uppercase;letter-spacing:.08em">' +
+        tipo.icono + ' ' + tipo.nombre + '</div>';
+      deEste.forEach(function (f) {
+        var temas = (f.temas || []).map(function (id) {
+          var t = TUTOR.tema(id);
+          return t ? '<span class="etiq">' + UI.esc(t.nombre) + '</span>' : '';
+        }).join(' ');
+        html += '<div class="fila"><div class="crece">' +
+          '<div class="titulo">' + UI.esc(f.titulo) + '</div>' +
+          '<div class="sub">' + UI.esc([f.autor, f.anio].filter(Boolean).join(' · ')) + '</div>' +
+          (temas ? '<div class="linea" style="gap:5px;margin-top:5px">' + temas + '</div>' : '') +
+          '</div>' +
+          (f.enlace ? '<a class="btn btn-s btn-fantasma" href="' + UI.esc(f.enlace) +
+            '" target="_blank" rel="noopener noreferrer">Abrir ↗</a>' : '') +
+          '<button class="btn btn-s btn-fantasma" data-accion="fuente-eliminar" data-id="' + f.id + '">Eliminar</button>' +
+          '</div>';
+      });
+    });
+    html += '</div>';
+
+    return html;
+  }
+});
+
+
+/* ============================================================
+   VISTA — Notas atómicas
+   ============================================================ */
+
+var NotasEstado = { filtro: '', editando: null };
+
+UI.registrar('notas', {
+  titulo: 'Notas',
+  sub: function () {
+    var n = Estado.notas().length;
+    var h = Notas.huerfanas().length;
+    if (!n) return 'Una nota, una idea. Enlazadas entre sí.';
+    return n + (n === 1 ? ' nota' : ' notas') + (h ? ' · ' + h + ' sin conectar' : ' · todas conectadas');
+  },
+  angosto: true,
+  acciones: function () {
+    return '<button class="btn btn-s btn-primario" data-accion="nota-nueva">+ Nueva nota</button>';
+  },
+
+  render: function () {
+    var html = '';
+
+    /* --- explicación, solo cuando aún no hay notas --- */
+    if (!Estado.notas().length && !NotasEstado.editando) {
+      html += '<div class="tarjeta"><div class="tarjeta-cab">' +
+        (typeof Minerva !== 'undefined' ? Minerva.avatar(34) : '') +
+        '<div><h3 style="margin:0">Para qué sirve esto</h3>' +
+        '<div class="sm tenue">Y en qué se diferencia del temario</div></div></div>' +
+        '<div class="doc">' +
+        '<p>El temario y las tarjetas sirven para <b>no olvidar</b> lo que ya entendiste. Las notas sirven ' +
+        'para <b>pensar</b>: capturar una idea propia, una duda de una guardia, una conexión que descubriste.</p>' +
+        '<p>Tres reglas que hacen que funcione:</p>' +
+        '<ul>' +
+        '<li><b>Una nota, una idea.</b> Si necesitas dos títulos, son dos notas.</li>' +
+        '<li><b>Con tus palabras.</b> Copiar y pegar no crea conocimiento.</li>' +
+        '<li><b>Enlaza siempre.</b> Escribe <code>[[Título de otra nota]]</code> dentro del texto. ' +
+        'Si esa nota no existe todavía, la app te ofrece crearla: escribir el enlace antes que la nota ' +
+        'es precisamente cómo crece un Zettelkasten.</li>' +
+        '</ul>' +
+        '<div class="aviso">El valor no está en las notas sueltas sino en los <b>retroenlaces</b>: ' +
+        'al abrir una nota verás qué otras la mencionan, y ahí aparecen las conexiones que no habías buscado. ' +
+        'Por ejemplo, la presión de perfusión cerebral y la coronaria son la misma resta.</div>' +
+        '</div></div>';
+    }
+
+    /* --- editor --- */
+    if (NotasEstado.editando) {
+      var n = NotasEstado.editando;
+      var esNueva = !n.id;
+      html += '<div class="tarjeta"><div class="tarjeta-cab">' +
+        '<h3>' + (esNueva ? 'Nueva nota' : 'Editar nota') + '</h3></div>' +
+
+        '<label class="campo"><span>Título <span class="tenue">(así la enlazarás desde otras)</span></span>' +
+        '<input type="text" id="n-titulo" value="' + UI.esc(n.titulo || '') + '" ' +
+        'placeholder="La perfusión es una resta"></label>' +
+
+        '<label class="campo"><span>Cuerpo</span>' +
+        '<textarea id="n-cuerpo" style="min-height:170px" placeholder="Escríbelo con tus palabras.&#10;&#10;Usa [[Otra nota]] para enlazar.">' +
+        UI.esc(n.cuerpo || '') + '</textarea></label>' +
+
+        '<label class="campo"><span>Temas relacionados</span>' +
+        '<select id="n-temas" multiple size="5">' +
+        TUTOR.AREAS.map(function (a) {
+          var temas = TUTOR.temasDeArea(a.id);
+          if (!temas.length) return '';
+          return '<optgroup label="' + a.icono + ' ' + UI.esc(a.nombre) + '">' +
+            temas.map(function (t) {
+              var sel = (n.temas || []).indexOf(t.id) >= 0 ? ' selected' : '';
+              return '<option value="' + t.id + '"' + sel + '>' + UI.esc(t.nombre) + '</option>';
+            }).join('') + '</optgroup>';
+        }).join('') + '</select></label>' +
+
+        '<div class="linea">' +
+        '<button class="btn btn-primario" data-accion="nota-guardar">Guardar</button>' +
+        '<button class="btn btn-fantasma" data-accion="nota-cancelar">Cancelar</button>' +
+        (esNueva ? '' : '<button class="btn btn-fantasma" data-accion="nota-eliminar" data-id="' + n.id + '">Eliminar</button>') +
+        '</div></div>';
+    }
+
+    /* --- buscador --- */
+    if (Estado.notas().length) {
+      html += '<div class="tarjeta mt"><div class="linea">' +
+        '<input type="text" id="n-buscar" placeholder="Buscar en tus notas…" value="' + UI.esc(NotasEstado.filtro) + '">' +
+        '<button class="btn" data-accion="nota-buscar">Buscar</button>' +
+        (NotasEstado.filtro ? '<button class="btn btn-fantasma" data-accion="nota-limpiar-busqueda">✕</button>' : '') +
+        '</div></div>';
+    }
+
+    /* --- lista --- */
+    var lista = Notas.buscar(NotasEstado.filtro);
+    lista.forEach(function (n) {
+      var atras = Notas.retroenlaces(n);
+      var salientes = Notas.extraerEnlaces(n.cuerpo);
+      html += '<div class="tarjeta nota" id="nota-' + n.id + '">' +
+        '<div class="tarjeta-cab"><h3>' + UI.esc(n.titulo) + '</h3>' +
+        '<div class="der">' +
+        '<button class="btn btn-s btn-fantasma" data-accion="nota-editar" data-id="' + n.id + '">Editar</button>' +
+        '</div></div>' +
+        '<div class="nota-cuerpo">' + Notas.render(n.cuerpo) + '</div>';
+
+      var pies = [];
+      if ((n.temas || []).length) {
+        pies.push('<div class="linea" style="gap:5px">' +
+          n.temas.map(function (id) {
+            var t = TUTOR.tema(id);
+            return t ? '<button class="etiq etiq-info" data-accion="ver-tema" data-tema="' + id + '" ' +
+              'style="cursor:pointer;border:0">' + UI.esc(t.nombre) + '</button>' : '';
+          }).join('') + '</div>');
+      }
+      if (atras.length) {
+        pies.push('<div class="retroenlaces"><b>Enlazan aquí:</b> ' +
+          atras.map(function (x) {
+            return '<button class="enlace-nota" data-accion="nota-abrir" data-id="' + x.id + '">' +
+              UI.esc(x.titulo) + '</button>';
+          }).join(' ') + '</div>');
+      }
+      if (!atras.length && !salientes.length) {
+        pies.push('<div class="sm tenue">Sin conexiones todavía. Una nota aislada rinde poco: ' +
+          'busca a qué otra idea se parece o de cuál se diferencia.</div>');
+      }
+      if (pies.length) html += '<div class="nota-pie">' + pies.join('') + '</div>';
+      html += '</div>';
+    });
+
+    if (Estado.notas().length && !lista.length) {
+      html += '<div class="tarjeta"><div class="vacio">Ninguna nota coincide con «' +
+        UI.esc(NotasEstado.filtro) + '».</div></div>';
+    }
+
+    return html;
+  }
+});
+
+
+/* ============================================================
    TARJETAS — repaso con recuperación activa y repetición espaciada
    Algoritmo SM-2 adaptado (ver Estado.calificarTarjeta)
    ============================================================ */
@@ -3190,11 +4355,15 @@ var NAVEGACION = [
   { ruta: 'inicio', icono: '🏠', nombre: 'Inicio', movil: true },
   { ruta: 'preparar', icono: '▶️', nombre: 'Nueva sesión', movil: true },
   { ruta: 'tarjetas', icono: '🔁', nombre: 'Tarjetas', movil: true, globo: 'tarjetas' },
+  { ruta: 'preparar-examen', icono: '📝', nombre: 'Examen', movil: true },
   { grupo: 'Organización' },
   { ruta: 'plan', icono: '🗓️', nombre: 'Plan', movil: true },
   { ruta: 'areas', icono: '🧭', nombre: 'Áreas' },
   { ruta: 'temario', icono: '📚', nombre: 'Temario' },
   { ruta: 'rendimiento', icono: '📊', nombre: 'Rendimiento', movil: true },
+  { grupo: 'Segundo cerebro' },
+  { ruta: 'notas', icono: '🕸️', nombre: 'Notas' },
+  { ruta: 'biblioteca', icono: '📚', nombre: 'Biblioteca' },
   { grupo: 'Herramientas' },
   { ruta: 'taller', icono: '🛠️', nombre: 'Taller' },
   { ruta: 'prompt', icono: '🤖', nombre: 'Prompt IA' },
@@ -3318,6 +4487,10 @@ function construirPrompt(idTema, idModo, minutos) {
    ------------------------------------------------------------ */
 
 UI.accion('navegar', function (d) {
+  if (Examen.activo() && !Examen.datos().entregado && d.ruta !== 'examen') {
+    if (!confirm('Hay un examen en curso. ¿Salir y perderlo?')) return;
+    Examen.abandonar();
+  }
   if (Sesion.activa() && d.ruta !== 'sesion') {
     if (!confirm('Hay una sesión en curso. ¿Salir y perder el progreso de esta sesión?')) return;
     Sesion.abandonar();
@@ -3554,6 +4727,187 @@ function copiarTexto(texto) {
   ta.remove();
 }
 
+/* --- biblioteca de fuentes --- */
+UI.accion('fuente-guardar', function () {
+  var titulo = (UI.$('#f-titulo').value || '').trim();
+  if (!titulo) { UI.brindis('Escribe al menos el título'); return; }
+  var enlace = (UI.$('#f-enlace').value || '').trim();
+  /* Solo se aceptan enlaces http(s): evita javascript: en un href. */
+  if (enlace && !/^https?:\/\//i.test(enlace)) {
+    UI.brindis('El enlace debe empezar por http:// o https://');
+    return;
+  }
+  Estado.guardarFuente({
+    id: Notas.idNuevo('f'),
+    titulo: titulo,
+    tipo: UI.$('#f-tipo').value,
+    autor: (UI.$('#f-autor').value || '').trim(),
+    anio: (UI.$('#f-anio').value || '').trim(),
+    enlace: enlace,
+    temas: Array.prototype.slice.call(UI.$('#f-temas').selectedOptions).map(function (o) { return o.value; }),
+    creado: new Date().toISOString()
+  });
+  UI.refrescar();
+  UI.brindis('Fuente añadida');
+});
+
+UI.accion('fuente-eliminar', function (d) {
+  Estado.eliminarFuente(d.id);
+  UI.refrescar();
+  UI.brindis('Fuente eliminada');
+});
+
+/* --- notas atómicas --- */
+UI.accion('nota-nueva', function () {
+  NotasEstado.editando = { titulo: '', cuerpo: '', temas: [] };
+  UI.ir('notas');
+});
+
+UI.accion('nota-crear-desde', function (d) {
+  NotasEstado.editando = { titulo: d.titulo, cuerpo: '', temas: [] };
+  UI.ir('notas');
+  UI.brindis('Nota nueva desde el enlace «' + d.titulo + '»');
+});
+
+UI.accion('nota-editar', function (d) {
+  var n = Estado.notas().filter(function (x) { return x.id === d.id; })[0];
+  if (!n) return;
+  NotasEstado.editando = JSON.parse(JSON.stringify(n));
+  UI.refrescar();
+  window.scrollTo(0, 0);
+});
+
+UI.accion('nota-guardar', function () {
+  var titulo = (UI.$('#n-titulo').value || '').trim();
+  if (!titulo) { UI.brindis('La nota necesita un título para poder enlazarla'); return; }
+  var n = NotasEstado.editando;
+  var repe = Notas.porTitulo(titulo);
+  if (repe && repe.id !== n.id) {
+    UI.brindis('Ya existe una nota con ese título: los enlaces serían ambiguos');
+    return;
+  }
+  Estado.guardarNota({
+    id: n.id || Notas.idNuevo('n'),
+    titulo: titulo,
+    cuerpo: UI.$('#n-cuerpo').value || '',
+    temas: Array.prototype.slice.call(UI.$('#n-temas').selectedOptions).map(function (o) { return o.value; }),
+    creado: n.creado
+  });
+  NotasEstado.editando = null;
+  UI.refrescar();
+  UI.brindis('Nota guardada');
+});
+
+UI.accion('nota-cancelar', function () {
+  NotasEstado.editando = null;
+  UI.refrescar();
+});
+
+UI.accion('nota-eliminar', function (d) {
+  Estado.eliminarNota(d.id);
+  NotasEstado.editando = null;
+  UI.refrescar();
+  UI.brindis('Nota eliminada');
+});
+
+UI.accion('nota-abrir', function (d) {
+  NotasEstado.filtro = '';
+  NotasEstado.editando = null;
+  UI.ir('notas');
+  var el = UI.$('#nota-' + d.id);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('destacada');
+    setTimeout(function () { el.classList.remove('destacada'); }, 1600);
+  }
+});
+
+UI.accion('nota-buscar', function () {
+  NotasEstado.filtro = (UI.$('#n-buscar').value || '').trim();
+  UI.refrescar();
+});
+
+UI.accion('nota-limpiar-busqueda', function () {
+  NotasEstado.filtro = '';
+  UI.refrescar();
+});
+
+/* Crear una nota a partir de una brecha detectada: convierte un
+   fallo en una idea propia, que es lo que cierra el círculo. */
+UI.accion('nota-desde-brecha', function (d) {
+  var t = TUTOR.tema(d.tema);
+  NotasEstado.editando = {
+    titulo: '',
+    cuerpo: 'Brecha detectada: ' + (d.texto || '') + '\n\n' +
+      (t ? 'Tema: [[' + t.nombre + ']]\n\n' : '') +
+      'Explícalo con tus palabras:\n',
+    temas: d.tema ? [d.tema] : []
+  };
+  UI.ir('notas');
+});
+
+/* --- diapositivas --- */
+UI.accion('presentar', function (d) {
+  Diapositivas.abrir(d.tema, d.esenciales === '1');
+});
+UI.accion('pres-cerrar', function () { Diapositivas.cerrar(); });
+UI.accion('pres-mover', function (d) { Diapositivas.mover(parseInt(d.d, 10)); });
+UI.accion('pres-ir', function (d) { Diapositivas.irA(parseInt(d.i, 10)); });
+UI.accion('pres-estudiar', function (d) {
+  Diapositivas.cerrar();
+  UI.ir('preparar', { tema: d.tema });
+});
+UI.accion('pres-tarjetas', function (d) {
+  Diapositivas.cerrar();
+  Mazo.cargar(d.tema);
+  UI.ir('tarjetas');
+});
+
+/* --- examen de alternativas --- */
+UI.accion('examen-iniciar', function () {
+  Examen.iniciar({
+    minutos: parseInt(UI.$('#x-minutos').value, 10) || 30,
+    preguntas: parseInt(UI.$('#x-preguntas').value, 10) || 15,
+    area: UI.$('#x-area').value || null,
+    nivel: UI.$('#x-nivel').value
+  });
+});
+
+UI.accion('examen-responder', function (d) {
+  Examen.responder(Examen.datos().indice, parseInt(d.i, 10));
+  UI.refrescar();
+});
+
+UI.accion('examen-marcar', function () {
+  Examen.marcar(Examen.datos().indice);
+  UI.refrescar();
+});
+
+UI.accion('examen-ir', function (d) { Examen.ir(parseInt(d.i, 10)); });
+
+UI.accion('examen-entregar', function () {
+  var e = Examen.datos();
+  var sin = e.preguntas.filter(function (p) { return p.respuesta === null; }).length;
+  if (sin) {
+    UI.modal('<h3>Entregar con ' + sin + ' sin responder</h3>' +
+      '<p>Quedan ' + sin + ' preguntas sin contestar y contarán como falladas. ' +
+      'Todavía puedes volver y completarlas.</p>' +
+      '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Seguir respondiendo</button>' +
+      '<button class="btn btn-acento" data-accion="examen-entregar-confirmar">Entregar igualmente</button></div>');
+    return;
+  }
+  Examen.entregar();
+});
+
+UI.accion('examen-entregar-confirmar', function () {
+  UI.cerrarModal();
+  Examen.entregar();
+});
+
+UI.accion('examen-abandonar', function () {
+  if (confirm('¿Salir del examen? No se guardará el resultado.')) Examen.abandonar();
+});
+
 /* --- taller de contenido --- */
 UI.accion('taller-generar', function () {
   var destino = UI.$('#t-destino').value;
@@ -3565,7 +4919,8 @@ UI.accion('taller-generar', function () {
     moduloNombre: (UI.$('#t-modulo').value || '').trim(),
     temaNombre: (UI.$('#t-tema').value || '').trim(),
     minutos: parseInt(UI.$('#t-minutos').value, 10) || 20,
-    fuentes: (UI.$('#t-fuentes').value || '').trim()
+    fuentes: (UI.$('#t-fuentes').value || '').trim(),
+    mcq: UI.$('#t-mcq') ? UI.$('#t-mcq').checked : true
   };
 
   if (!cfg.temaNombre) { UI.brindis('Escribe el nombre del tema'); return; }
@@ -3644,7 +4999,9 @@ function pintarValidacion(r) {
     html += '<div class="fila"><div class="crece">' +
       '<div class="titulo">' + UI.esc(t.nombre) + (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') + '</div>' +
       '<div class="sub">' + t.bloques.length + ' bloques · ' + t.preguntas.length + ' preguntas · ' +
-      t.caso.pasos.length + ' pasos de caso · ' + t.tarjetas.length + ' tarjetas · ' + t.minutos + ' min</div>' +
+      t.caso.pasos.length + ' pasos de caso · ' + t.tarjetas.length + ' tarjetas' +
+      (t.mcq && t.mcq.length ? ' · ' + t.mcq.length + ' de alternativa' : '') +
+      ' · ' + t.minutos + ' min</div>' +
       (t.fuentes ? '<div class="sub">Fuentes: ' + UI.esc(t.fuentes) + '</div>' : '') +
       '</div></div>';
     html += '<div class="previa-idea">' + UI.esc(t.ideaCentral) + '</div>';

@@ -186,49 +186,84 @@ var UI = (function () {
 
 
 /* ============================================================
-   Cronómetro reutilizable para las sesiones
+   Cronómetro reutilizable para las sesiones y el examen
+   ------------------------------------------------------------
+   Cuenta con MARCAS DE TIEMPO, no restando un segundo por cada
+   tic. La diferencia importa: los navegadores frenan los
+   temporizadores de las pestañas en segundo plano (llegan a un
+   tic por minuto), así que un contador por tics se atrasaría
+   durante un examen de 30 minutos si Diego cambia de pestaña.
+   Calculando contra Date.now(), el reloj de pantalla se corrige
+   solo al volver, y la entrega automática se dispara aunque el
+   tiempo se haya agotado con la pestaña oculta.
    ============================================================ */
 
 var Crono = (function () {
   var intervalo = null;
-  var restanteSeg = 0;
+  var finEn = 0;          /* marca de tiempo en que llega a cero  */
+  var restanteAlPausar = 0;
   var alCambiar = null;
   var alTerminar = null;
   var pausado = false;
+  var terminado = false;  /* alTerminar se dispara una sola vez   */
 
   function formatear(seg) {
     var m = Math.floor(Math.abs(seg) / 60), s = Math.abs(seg) % 60;
     return (seg < 0 ? '−' : '') + m + ':' + (s < 10 ? '0' : '') + s;
   }
 
-  function tic() {
-    if (pausado) return;
-    restanteSeg -= 1;
-    if (alCambiar) alCambiar(restanteSeg, formatear(restanteSeg));
-    if (restanteSeg === 0 && alTerminar) alTerminar();
+  function restante() {
+    if (pausado) return Math.round(restanteAlPausar / 1000);
+    return Math.round((finEn - Date.now()) / 1000);
+  }
+
+  function refrescar() {
+    if (pausado || !intervalo) return;
+    var seg = restante();
+    if (alCambiar) alCambiar(seg, formatear(seg));
+    /* Al volver de segundo plano el salto puede ser de minutos,
+       así que se comprueba <= 0 y no == 0. */
+    if (seg <= 0 && !terminado) {
+      terminado = true;
+      if (alTerminar) alTerminar();
+    }
+  }
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) refrescar();
+    });
   }
 
   return {
     iniciar: function (minutos, cambio, fin) {
       Crono.parar();
-      restanteSeg = Math.round(minutos * 60);
-      alCambiar = cambio; alTerminar = fin; pausado = false;
-      if (alCambiar) alCambiar(restanteSeg, formatear(restanteSeg));
-      intervalo = setInterval(tic, 1000);
+      finEn = Date.now() + Math.round(minutos * 60) * 1000;
+      alCambiar = cambio; alTerminar = fin;
+      pausado = false; terminado = false;
+      if (alCambiar) alCambiar(restante(), formatear(restante()));
+      intervalo = setInterval(refrescar, 1000);
     },
     alternarPausa: function () {
-      pausado = !pausado;
+      if (pausado) {
+        finEn = Date.now() + restanteAlPausar;
+        pausado = false;
+      } else {
+        restanteAlPausar = finEn - Date.now();
+        pausado = true;
+      }
       return pausado;
     },
     estaPausado: function () { return pausado; },
     parar: function () {
       if (intervalo) clearInterval(intervalo);
       intervalo = null;
+      pausado = false;
     },
     transcurridoMin: function (totalMin) {
-      return Math.max(0, Math.round(totalMin - restanteSeg / 60));
+      return Math.max(0, Math.round(totalMin - restante() / 60));
     },
     formatear: formatear,
-    restante: function () { return restanteSeg; }
+    restante: restante
   };
 })();

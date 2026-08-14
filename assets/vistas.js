@@ -111,6 +111,8 @@ UI.registrar('inicio', {
         html += '<div class="fila"><div class="crece">' +
           '<div class="titulo">' + UI.esc(b.texto) + '</div>' +
           '<div class="sub">' + UI.esc(t ? t.nombre : '') + '</div></div>' +
+          '<button class="btn btn-s btn-fantasma" data-accion="nota-desde-brecha" data-tema="' + b.tema +
+          '" data-texto="' + UI.esc(b.texto) + '" title="Convertir en nota">✍️</button>' +
           '<button class="btn btn-s" data-accion="repasar-brecha" data-tema="' + b.tema + '">Repasar</button>' +
           '<button class="btn btn-s btn-fantasma" data-accion="cerrar-brecha" data-i="' + i + '">✓</button></div>';
       });
@@ -209,6 +211,7 @@ UI.registrar('temario', {
           '</div>' +
           UI.barra(d, d >= 70 ? 'ok' : d >= 40 ? 'alerta' : 'acento') +
           '</div>' +
+            '<button class="btn btn-s btn-fantasma" data-accion="presentar" data-tema="' + t.id + '" title="Modo presentación">🖥️</button>' +
             '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
             '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
             '</div>';
@@ -286,7 +289,8 @@ UI.registrar('tema', {
       UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
   },
   acciones: function (p) {
-    return '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
+    return '<button class="btn btn-s" data-accion="presentar" data-tema="' + p.tema + '">🖥️ Presentar</button>' +
+      '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
       '<button class="btn btn-primario btn-s" data-accion="estudiar-tema" data-tema="' + p.tema + '">Estudiar con el método</button>';
   },
   angosto: true,
@@ -330,6 +334,33 @@ UI.registrar('tema', {
     html += bloqueError(t.error);
 
     html += '<div class="aviso aviso-ok mt"><b>Perla de examen.</b> ' + t.perla + '</div>';
+
+    /* Segundo cerebro: qué has leído y qué has pensado sobre este tema */
+    var fuentes = Estado.fuentesDeTema(t.id);
+    var notas = typeof Notas !== 'undefined' ? Notas.deTema(t.id) : [];
+
+    if (fuentes.length || notas.length) {
+      html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Tu material sobre este tema</h3></div>';
+      fuentes.forEach(function (f) {
+        var tp = tipoFuente(f.tipo);
+        html += '<div class="fila"><div style="font-size:1.1rem">' + tp.icono + '</div>' +
+          '<div class="crece"><div class="titulo">' + UI.esc(f.titulo) + '</div>' +
+          '<div class="sub">' + UI.esc([f.autor, f.anio].filter(Boolean).join(' · ')) + '</div></div>' +
+          (f.enlace ? '<a class="btn btn-s btn-fantasma" href="' + UI.esc(f.enlace) +
+            '" target="_blank" rel="noopener noreferrer">Abrir ↗</a>' : '') + '</div>';
+      });
+      notas.forEach(function (n) {
+        html += '<div class="fila"><div style="font-size:1.1rem">🕸️</div>' +
+          '<div class="crece"><div class="titulo">' + UI.esc(n.titulo) + '</div>' +
+          '<div class="sub">Nota propia</div></div>' +
+          '<button class="btn btn-s btn-fantasma" data-accion="nota-abrir" data-id="' + n.id + '">Abrir</button></div>';
+      });
+      html += '</div>';
+    }
+
+    html += '<div class="linea fin mt">' +
+      '<button class="btn btn-s btn-fantasma" data-accion="nota-desde-brecha" data-tema="' + t.id +
+      '" data-texto="">✍️ Escribir una nota sobre este tema</button></div>';
 
     return html;
   }

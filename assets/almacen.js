@@ -28,7 +28,11 @@ var Almacen = (function () {
       racha: { ultimoDia: null, dias: 0, mejor: 0 },
       /* Contenido creado por el usuario desde el Taller. Viaja con
          el progreso, de modo que se exporta e importa con él. */
-      contenido: { areas: [], modulos: [], temas: [] }
+      contenido: { areas: [], modulos: [], temas: [] },
+      examenes: [],
+      /* Segundo cerebro: fuentes consultadas y notas atómicas. */
+      fuentes: [],
+      notas: []
     };
   }
 
@@ -528,6 +532,60 @@ var Estado = (function () {
         origen: 'sugerido'
       };
     },
+
+    /* ---------- biblioteca de fuentes ---------- */
+    fuentes: function () { return d.fuentes || (d.fuentes = []); },
+
+    guardarFuente: function (f) {
+      var lista = Estado.fuentes();
+      var i = lista.findIndex(function (x) { return x.id === f.id; });
+      if (i >= 0) lista[i] = f; else lista.unshift(f);
+      persistir();
+      notificar();
+    },
+
+    eliminarFuente: function (id) {
+      d.fuentes = Estado.fuentes().filter(function (f) { return f.id !== id; });
+      persistir();
+      notificar();
+    },
+
+    fuentesDeTema: function (idTema) {
+      return Estado.fuentes().filter(function (f) {
+        return (f.temas || []).indexOf(idTema) >= 0;
+      });
+    },
+
+    /* ---------- notas atómicas ---------- */
+    notas: function () { return d.notas || (d.notas = []); },
+
+    guardarNota: function (n) {
+      var lista = Estado.notas();
+      var i = lista.findIndex(function (x) { return x.id === n.id; });
+      n.modificado = new Date().toISOString();
+      if (i >= 0) lista[i] = n;
+      else { n.creado = n.modificado; lista.unshift(n); }
+      persistir();
+      notificar();
+    },
+
+    eliminarNota: function (id) {
+      d.notas = Estado.notas().filter(function (n) { return n.id !== id; });
+      persistir();
+      notificar();
+    },
+
+    /* ---------- exámenes ---------- */
+    registrarExamen: function (resumen) {
+      if (!d.examenes) d.examenes = [];
+      d.examenes.unshift(resumen);
+      if (d.examenes.length > 60) d.examenes.length = 60;
+      Estado.registrarDia();
+      persistir();
+      notificar();
+    },
+
+    examenes: function () { return d.examenes || []; },
 
     /* ---------- contenido propio (Taller) ---------- */
     contenido: function () {

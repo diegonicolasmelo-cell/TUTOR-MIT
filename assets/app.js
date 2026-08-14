@@ -10,11 +10,15 @@ var NAVEGACION = [
   { ruta: 'inicio', icono: '🏠', nombre: 'Inicio', movil: true },
   { ruta: 'preparar', icono: '▶️', nombre: 'Nueva sesión', movil: true },
   { ruta: 'tarjetas', icono: '🔁', nombre: 'Tarjetas', movil: true, globo: 'tarjetas' },
+  { ruta: 'preparar-examen', icono: '📝', nombre: 'Examen', movil: true },
   { grupo: 'Organización' },
   { ruta: 'plan', icono: '🗓️', nombre: 'Plan', movil: true },
   { ruta: 'areas', icono: '🧭', nombre: 'Áreas' },
   { ruta: 'temario', icono: '📚', nombre: 'Temario' },
   { ruta: 'rendimiento', icono: '📊', nombre: 'Rendimiento', movil: true },
+  { grupo: 'Segundo cerebro' },
+  { ruta: 'notas', icono: '🕸️', nombre: 'Notas' },
+  { ruta: 'biblioteca', icono: '📚', nombre: 'Biblioteca' },
   { grupo: 'Herramientas' },
   { ruta: 'taller', icono: '🛠️', nombre: 'Taller' },
   { ruta: 'prompt', icono: '🤖', nombre: 'Prompt IA' },
@@ -138,6 +142,10 @@ function construirPrompt(idTema, idModo, minutos) {
    ------------------------------------------------------------ */
 
 UI.accion('navegar', function (d) {
+  if (Examen.activo() && !Examen.datos().entregado && d.ruta !== 'examen') {
+    if (!confirm('Hay un examen en curso. ¿Salir y perderlo?')) return;
+    Examen.abandonar();
+  }
   if (Sesion.activa() && d.ruta !== 'sesion') {
     if (!confirm('Hay una sesión en curso. ¿Salir y perder el progreso de esta sesión?')) return;
     Sesion.abandonar();
@@ -374,6 +382,187 @@ function copiarTexto(texto) {
   ta.remove();
 }
 
+/* --- biblioteca de fuentes --- */
+UI.accion('fuente-guardar', function () {
+  var titulo = (UI.$('#f-titulo').value || '').trim();
+  if (!titulo) { UI.brindis('Escribe al menos el título'); return; }
+  var enlace = (UI.$('#f-enlace').value || '').trim();
+  /* Solo se aceptan enlaces http(s): evita javascript: en un href. */
+  if (enlace && !/^https?:\/\//i.test(enlace)) {
+    UI.brindis('El enlace debe empezar por http:// o https://');
+    return;
+  }
+  Estado.guardarFuente({
+    id: Notas.idNuevo('f'),
+    titulo: titulo,
+    tipo: UI.$('#f-tipo').value,
+    autor: (UI.$('#f-autor').value || '').trim(),
+    anio: (UI.$('#f-anio').value || '').trim(),
+    enlace: enlace,
+    temas: Array.prototype.slice.call(UI.$('#f-temas').selectedOptions).map(function (o) { return o.value; }),
+    creado: new Date().toISOString()
+  });
+  UI.refrescar();
+  UI.brindis('Fuente añadida');
+});
+
+UI.accion('fuente-eliminar', function (d) {
+  Estado.eliminarFuente(d.id);
+  UI.refrescar();
+  UI.brindis('Fuente eliminada');
+});
+
+/* --- notas atómicas --- */
+UI.accion('nota-nueva', function () {
+  NotasEstado.editando = { titulo: '', cuerpo: '', temas: [] };
+  UI.ir('notas');
+});
+
+UI.accion('nota-crear-desde', function (d) {
+  NotasEstado.editando = { titulo: d.titulo, cuerpo: '', temas: [] };
+  UI.ir('notas');
+  UI.brindis('Nota nueva desde el enlace «' + d.titulo + '»');
+});
+
+UI.accion('nota-editar', function (d) {
+  var n = Estado.notas().filter(function (x) { return x.id === d.id; })[0];
+  if (!n) return;
+  NotasEstado.editando = JSON.parse(JSON.stringify(n));
+  UI.refrescar();
+  window.scrollTo(0, 0);
+});
+
+UI.accion('nota-guardar', function () {
+  var titulo = (UI.$('#n-titulo').value || '').trim();
+  if (!titulo) { UI.brindis('La nota necesita un título para poder enlazarla'); return; }
+  var n = NotasEstado.editando;
+  var repe = Notas.porTitulo(titulo);
+  if (repe && repe.id !== n.id) {
+    UI.brindis('Ya existe una nota con ese título: los enlaces serían ambiguos');
+    return;
+  }
+  Estado.guardarNota({
+    id: n.id || Notas.idNuevo('n'),
+    titulo: titulo,
+    cuerpo: UI.$('#n-cuerpo').value || '',
+    temas: Array.prototype.slice.call(UI.$('#n-temas').selectedOptions).map(function (o) { return o.value; }),
+    creado: n.creado
+  });
+  NotasEstado.editando = null;
+  UI.refrescar();
+  UI.brindis('Nota guardada');
+});
+
+UI.accion('nota-cancelar', function () {
+  NotasEstado.editando = null;
+  UI.refrescar();
+});
+
+UI.accion('nota-eliminar', function (d) {
+  Estado.eliminarNota(d.id);
+  NotasEstado.editando = null;
+  UI.refrescar();
+  UI.brindis('Nota eliminada');
+});
+
+UI.accion('nota-abrir', function (d) {
+  NotasEstado.filtro = '';
+  NotasEstado.editando = null;
+  UI.ir('notas');
+  var el = UI.$('#nota-' + d.id);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('destacada');
+    setTimeout(function () { el.classList.remove('destacada'); }, 1600);
+  }
+});
+
+UI.accion('nota-buscar', function () {
+  NotasEstado.filtro = (UI.$('#n-buscar').value || '').trim();
+  UI.refrescar();
+});
+
+UI.accion('nota-limpiar-busqueda', function () {
+  NotasEstado.filtro = '';
+  UI.refrescar();
+});
+
+/* Crear una nota a partir de una brecha detectada: convierte un
+   fallo en una idea propia, que es lo que cierra el círculo. */
+UI.accion('nota-desde-brecha', function (d) {
+  var t = TUTOR.tema(d.tema);
+  NotasEstado.editando = {
+    titulo: '',
+    cuerpo: 'Brecha detectada: ' + (d.texto || '') + '\n\n' +
+      (t ? 'Tema: [[' + t.nombre + ']]\n\n' : '') +
+      'Explícalo con tus palabras:\n',
+    temas: d.tema ? [d.tema] : []
+  };
+  UI.ir('notas');
+});
+
+/* --- diapositivas --- */
+UI.accion('presentar', function (d) {
+  Diapositivas.abrir(d.tema, d.esenciales === '1');
+});
+UI.accion('pres-cerrar', function () { Diapositivas.cerrar(); });
+UI.accion('pres-mover', function (d) { Diapositivas.mover(parseInt(d.d, 10)); });
+UI.accion('pres-ir', function (d) { Diapositivas.irA(parseInt(d.i, 10)); });
+UI.accion('pres-estudiar', function (d) {
+  Diapositivas.cerrar();
+  UI.ir('preparar', { tema: d.tema });
+});
+UI.accion('pres-tarjetas', function (d) {
+  Diapositivas.cerrar();
+  Mazo.cargar(d.tema);
+  UI.ir('tarjetas');
+});
+
+/* --- examen de alternativas --- */
+UI.accion('examen-iniciar', function () {
+  Examen.iniciar({
+    minutos: parseInt(UI.$('#x-minutos').value, 10) || 30,
+    preguntas: parseInt(UI.$('#x-preguntas').value, 10) || 15,
+    area: UI.$('#x-area').value || null,
+    nivel: UI.$('#x-nivel').value
+  });
+});
+
+UI.accion('examen-responder', function (d) {
+  Examen.responder(Examen.datos().indice, parseInt(d.i, 10));
+  UI.refrescar();
+});
+
+UI.accion('examen-marcar', function () {
+  Examen.marcar(Examen.datos().indice);
+  UI.refrescar();
+});
+
+UI.accion('examen-ir', function (d) { Examen.ir(parseInt(d.i, 10)); });
+
+UI.accion('examen-entregar', function () {
+  var e = Examen.datos();
+  var sin = e.preguntas.filter(function (p) { return p.respuesta === null; }).length;
+  if (sin) {
+    UI.modal('<h3>Entregar con ' + sin + ' sin responder</h3>' +
+      '<p>Quedan ' + sin + ' preguntas sin contestar y contarán como falladas. ' +
+      'Todavía puedes volver y completarlas.</p>' +
+      '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Seguir respondiendo</button>' +
+      '<button class="btn btn-acento" data-accion="examen-entregar-confirmar">Entregar igualmente</button></div>');
+    return;
+  }
+  Examen.entregar();
+});
+
+UI.accion('examen-entregar-confirmar', function () {
+  UI.cerrarModal();
+  Examen.entregar();
+});
+
+UI.accion('examen-abandonar', function () {
+  if (confirm('¿Salir del examen? No se guardará el resultado.')) Examen.abandonar();
+});
+
 /* --- taller de contenido --- */
 UI.accion('taller-generar', function () {
   var destino = UI.$('#t-destino').value;
@@ -385,7 +574,8 @@ UI.accion('taller-generar', function () {
     moduloNombre: (UI.$('#t-modulo').value || '').trim(),
     temaNombre: (UI.$('#t-tema').value || '').trim(),
     minutos: parseInt(UI.$('#t-minutos').value, 10) || 20,
-    fuentes: (UI.$('#t-fuentes').value || '').trim()
+    fuentes: (UI.$('#t-fuentes').value || '').trim(),
+    mcq: UI.$('#t-mcq') ? UI.$('#t-mcq').checked : true
   };
 
   if (!cfg.temaNombre) { UI.brindis('Escribe el nombre del tema'); return; }
@@ -464,7 +654,9 @@ function pintarValidacion(r) {
     html += '<div class="fila"><div class="crece">' +
       '<div class="titulo">' + UI.esc(t.nombre) + (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') + '</div>' +
       '<div class="sub">' + t.bloques.length + ' bloques · ' + t.preguntas.length + ' preguntas · ' +
-      t.caso.pasos.length + ' pasos de caso · ' + t.tarjetas.length + ' tarjetas · ' + t.minutos + ' min</div>' +
+      t.caso.pasos.length + ' pasos de caso · ' + t.tarjetas.length + ' tarjetas' +
+      (t.mcq && t.mcq.length ? ' · ' + t.mcq.length + ' de alternativa' : '') +
+      ' · ' + t.minutos + ' min</div>' +
       (t.fuentes ? '<div class="sub">Fuentes: ' + UI.esc(t.fuentes) + '</div>' : '') +
       '</div></div>';
     html += '<div class="previa-idea">' + UI.esc(t.ideaCentral) + '</div>';

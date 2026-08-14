@@ -361,6 +361,36 @@ TUTOR.temasDeArea = function (idArea) {
   });
 };
 
+/* ------------------------------------------------------------
+   BANCO DE PREGUNTAS DE ALTERNATIVA
+   Se guarda aparte del temario para poder ampliarlo sin tocar
+   el contenido, y porque los temas creados en el Taller traen
+   las suyas dentro del propio tema.
+   ------------------------------------------------------------ */
+TUTOR.MCQ = TUTOR.MCQ || {};
+
+TUTOR.registrarMCQ = function (mapa) {
+  Object.keys(mapa).forEach(function (idTema) {
+    TUTOR.MCQ[idTema] = (TUTOR.MCQ[idTema] || []).concat(mapa[idTema]);
+  });
+};
+
+/* Preguntas de alternativa de un tema, vengan del banco o del
+   propio tema (contenido creado por el usuario). */
+TUTOR.mcqDe = function (idTema) {
+  var t = TUTOR.tema(idTema);
+  var propias = (t && t.mcq) ? t.mcq : [];
+  return (TUTOR.MCQ[idTema] || []).concat(propias);
+};
+
+TUTOR.temasConMcq = function () {
+  return TUTOR.TEMAS.filter(function (t) { return TUTOR.mcqDe(t.id).length > 0; });
+};
+
+TUTOR.totalMcq = function () {
+  return TUTOR.TEMAS.reduce(function (n, t) { return n + TUTOR.mcqDe(t.id).length; }, 0);
+};
+
 /* Todas las tarjetas del temario, con su tema de origen. */
 TUTOR.todasLasTarjetas = function () {
   var out = [];

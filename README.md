@@ -25,8 +25,12 @@ programa solo.
 | **Tarjetas** | Recuperación activa con repetición espaciada (SM-2 adaptado), usable desde el móvil. |
 | **Plan** | Calendario de 14 días generado a partir de los minutos reales disponibles cada día. |
 | **Temario** | 32 temas en 5 áreas y 11 módulos, con ficha completa consultable fuera de sesión. |
-| **Rendimiento** | Precisión, constancia, prioridad de repaso y registro histórico de brechas. |
-| **Taller** | Crea temas y áreas nuevas **desde tus propios apuntes y papers**, sin tocar código: la app genera el prompt con el esquema, NotebookLM lo responde leyendo tus fuentes, y pegas el JSON de vuelta. Valida, sanea, previsualiza e integra. |
+| **Simulacro de examen** | Examen cronometrado de alternativas: eliges duración, número de preguntas, áreas y nivel. Corrige solo, explica **por qué falla cada distractor**, desglosa por área y por nivel, y convierte los fallos en brechas del plan. |
+| **Diapositivas** | Cualquier tema se proyecta a pantalla completa, navegable con teclado. Útil para repasar en el móvil o exponer en la unidad. |
+| **Biblioteca** | Registro de tus fuentes —papers, guías, libros, apuntes, clases— con enlace, referencia y tema asociado. Guarda **referencias, no archivos**. |
+| **Notas** | Notas atómicas enlazadas con `[[corchetes dobles]]`, retroenlaces automáticos y detección de notas huérfanas. Es la parte de «segundo cerebro»: no sirve para no olvidar, sirve para pensar. |
+| **Rendimiento** | Precisión, constancia, prioridad de repaso, historial de exámenes y registro histórico de brechas. |
+| **Taller** | Crea temas, áreas y preguntas de alternativa nuevas **desde tus propios apuntes y papers**, sin tocar código: la app genera el prompt con el esquema, NotebookLM lo responde leyendo tus fuentes, y pegas el JSON de vuelta. Valida, sanea, previsualiza e integra. |
 | **Prompt IA** | Genera el protocolo del tutor en texto para NotebookLM, Claude o ChatGPT, personalizado con el área, el tema, el tiempo, las brechas registradas y las fuentes de referencia propias de esa materia. |
 
 ## Las seis fases de la sesión
@@ -43,7 +47,7 @@ modo examen, tutor intensivo, profundización), definido en `assets/datos-nucleo
 
 ## Contenido
 
-**32 temas · 11 módulos · 5 áreas · 252 tarjetas.**
+**32 temas · 11 módulos · 5 áreas · 252 tarjetas · 63 preguntas de alternativa.**
 
 | Área | Temas | Contenido |
 |---|---|---|
@@ -56,16 +60,54 @@ modo examen, tutor intensivo, profundización), definido en `assets/datos-nucleo
 Cada tema incluye idea central, bloques por nivel de prioridad, variables clave,
 fisiopatología, correlación clínica, error frecuente, perla de examen, ejercicio Feynman,
 8–9 preguntas de tres niveles, un caso clínico socrático de 5–7 pasos y 6–9 tarjetas.
+27 de los 32 temas traen además preguntas de alternativa (`assets/datos-mcq.js`).
 
 Los conceptos siguen las referencias habituales de cada materia: Guyton & Hall, Boron &
 Boulpaep, Costanzo, Harrison, Braunwald, West, Rose & Post, Kandel y Goodman & Gilman.
+
+## El examen: los distractores son el contenido
+
+Una pregunta de alternativa sirve de poco si las opciones falsas son de relleno. En este
+banco **cada distractor es un error conceptual concreto y frecuente**, y lleva escrita la
+razón de por qué resulta tentador y por qué falla. Al revisar el examen se aprende tanto de
+las opciones descartadas como de la correcta.
+
+El examen se arma pesando cada candidato por `(100 − dominio)` más un extra si el tema es de
+alta prioridad, más algo de azar: pregunta más por donde estás peor, sin volverse predecible.
+Preguntas y alternativas se barajan en cada intento.
+
+El resultado no se queda en un porcentaje. La app compara tu acierto por nivel y lo interpreta
+en voz alta: si aciertas los datos pero fallas al aplicarlos, te lo dice con esas palabras.
+Y cada fallo entra como brecha al plan, así que el examen alimenta el estudio de los días
+siguientes en vez de terminar en una nota.
+
+## Segundo cerebro: biblioteca y notas
+
+Son dos cosas distintas y la app lo dice explícitamente:
+
+- **El temario y las tarjetas sirven para no olvidar** lo que ya entendiste. Ahí manda la
+  repetición espaciada.
+- **Las notas sirven para pensar.** Una nota atómica es una idea tuya, escrita con tus
+  palabras, enlazada a otras con `[[corchetes dobles]]`. La app calcula los retroenlaces y
+  señala las notas huérfanas —las que nadie cita y que no citan a nadie— porque una nota sin
+  conexiones es una nota que no vas a volver a encontrar.
+
+Un enlace a una nota que todavía no existe se muestra pendiente y la crea con el título ya
+puesto al pulsarlo: escribir primero y ordenar después, que es como funciona un Zettelkasten.
+
+La **biblioteca guarda referencias, no archivos**: título, autores, año, tipo, enlace y tema
+asociado. No es una limitación de diseño sino del destino —`localStorage` ronda los 5–10 MB y
+`PropertiesService` admite 9 KB por propiedad—, así que un PDF no cabe en ninguno de los dos.
+Lo que sí ocurre es que fuentes y notas asociadas a un tema aparecen en su ficha, bajo
+«Tu material sobre este tema».
 
 ## El Taller: contenido propio sin tocar código
 
 El temario que viene de fábrica no es el límite. Desde **Taller** se añaden temas y áreas
 completas en tres pasos, todos dentro de la interfaz:
 
-1. **Defines qué crear** (área nueva o existente, módulo, tema, minutos y fuentes). La app
+1. **Defines qué crear** (área nueva o existente, módulo, tema, minutos, fuentes y si quieres
+   preguntas de alternativa). La app
    genera un prompt que incluye el **esquema JSON exacto** del temario y una regla explícita:
    *usar exclusivamente las fuentes del cuaderno*, y escribir `NO CUBIERTO POR LAS FUENTES`
    antes que rellenar con conocimiento general.
@@ -73,6 +115,11 @@ completas en tres pasos, todos dentro de la interfaz:
 3. **Pegas el JSON de vuelta.** La app lo valida campo por campo, informa de errores concretos
    («faltan preguntas de nivel 3», «el caso necesita al menos 3 pasos»), sanea el HTML,
    muestra una vista previa y lo integra al temario, al plan y al mazo de tarjetas.
+
+Si pides alternativas, el prompt no se limita a pedir «4 opciones»: exige que cada distractor
+sea un error conceptual real y que traiga escrita su razón, igual que el banco de fábrica. El
+validador **rechaza toda pregunta que no tenga exactamente una opción correcta** y avisa de
+cuál descartó, en vez de importar una pregunta rota en silencio.
 
 Tres decisiones que importan:
 
@@ -118,12 +165,16 @@ assets/
   datos-renal.js             |
   datos-neuro.js             |
   datos-farmaco.js          /
+  datos-mcq.js              banco de preguntas de alternativa (63, en 27 temas)
   almacen.js                capa de persistencia intercambiable + reglas de negocio
   ui.js                     utilidades, enrutador y cronómetro
   asistente.js              Minerva: motor de reglas y panel
   taller.js                 esquema, generador de prompt, validador, saneado e importador
   vistas.js                 inicio, áreas, temario, ficha, plan, rendimiento, prompt, ajustes
   estudio.js                motor de la sesión guiada
+  examen.js                 armado, cronómetro, corrección y lectura del simulacro
+  diapositivas.js           proyección a pantalla completa con navegación por teclado
+  biblioteca.js             fuentes y notas atómicas enlazadas (retroenlaces y huérfanas)
   tarjetas.js               repaso espaciado
   app.js                    acciones, generador de prompt y arranque
 herramientas/construir.js   genera dist/ y appsscript/
@@ -144,6 +195,11 @@ MIGRACION.md                paso a paso para llevarlo a Apps Script
 - **Un solo esquema para el Taller.** El generador de prompt y el validador salen de la misma
   definición (`Taller.ESQUEMA` y `plantillaJson`), de modo que no pueden divergir: lo que se
   pide es exactamente lo que se valida.
+- **El cronómetro cuenta con marcas de tiempo, no con tics.** Los navegadores frenan los
+  temporizadores de las pestañas en segundo plano, así que restar un segundo por tic atrasaría
+  el reloj durante un examen de 30 minutos. Calculando contra `Date.now()` la pantalla se
+  corrige sola al volver y la entrega automática se dispara aunque el tiempo se agotara con la
+  pestaña oculta.
 - **Minerva es un motor de reglas, no un texto fijo.** Cada regla inspecciona el estado y
   devuelve como mucho un consejo con una acción; se ordenan por prioridad y se muestra la más
   relevante. Añadir una regla nueva es añadir una función a una lista.
@@ -152,10 +208,24 @@ MIGRACION.md                paso a paso para llevarlo a Apps Script
 
 ## Estado
 
-Mockup funcional y probado de extremo a extremo en Chromium, sin errores de consola: las seis
-fases, el repaso espaciado, el planificador con intercalado entre áreas, la activación y pausa
-de áreas, el registro de brechas, Minerva, el generador de prompt y el Taller completo
-—generar, validar, sanear, importar, estudiar el tema importado, sobrevivir a una recarga,
-verificar y eliminar— funcionan sobre datos reales.
+Mockup funcional y probado de extremo a extremo en Chromium, sin errores de consola en
+ninguna de las seis baterías de prueba:
+
+- **Sesión y repaso** — las seis fases, el repaso espaciado, el planificador con intercalado
+  entre áreas, la activación y pausa de áreas, el registro de brechas, Minerva y el generador
+  de prompt, sobre datos reales.
+- **Taller** — generar, validar, sanear, importar, estudiar el tema importado, sobrevivir a
+  una recarga, verificar y eliminar. Un `onerror` inyectado a propósito no llega a ejecutarse.
+- **Examen** — corrección comprobada al 100 % en una pasada de respuestas deliberadamente
+  correctas; integridad del banco verificada (exactamente una correcta y cuatro opciones por
+  pregunta, todas con razón escrita); los fallos entran como brechas y el examen queda en el
+  historial.
+- **Taller + alternativas** — una pregunta defectuosa con dos correctas se rechaza con aviso
+  y las buenas se importan igual.
+- **Diapositivas** — 12 diapositivas generadas desde los datos del tema, navegación con
+  flechas, `Inicio`, `Fin` y `Esc`, y salto directo a las tarjetas al cerrar.
+- **Notas y biblioteca** — enlaces `[[…]]`, retroenlaces, huérfanas, búsqueda, rechazo de
+  enlaces `javascript:`, aparición en la ficha del tema y persistencia tras recargar.
+
 El tema claro/oscuro resuelve correctamente en los cuatro estados posibles.
 Lo pendiente para producción está en `MIGRACION.md`.

@@ -33,7 +33,8 @@ const SCRIPTS_DATOS = [
   'datos-respiratorio.js',
   'datos-renal.js',
   'datos-neuro.js',
-  'datos-farmaco.js'
+  'datos-farmaco.js',
+  'datos-mcq.js'
 ];
 
 const SCRIPTS_APP = [
@@ -43,6 +44,9 @@ const SCRIPTS_APP = [
   'vistas.js',
   'taller.js',
   'estudio.js',
+  'examen.js',
+  'diapositivas.js',
+  'biblioteca.js',
   'tarjetas.js',
   'app.js'
 ];
@@ -192,4 +196,5 @@ console.log('  appsscript/appsscript.json');
 const bloqueAreas = (jsDatos.split('TUTOR.AREAS = [')[1] || '').split('\n];')[0];
 console.log('\nÁreas: ' + (bloqueAreas.match(/^\s*id: '/gm) || []).length +
   '  ·  Temas: ' + (jsDatos.match(/^\s{2}id: '/gm) || []).length +
-  '  ·  Tarjetas: ' + (jsDatos.match(/^\s*\{ f: '/gm) || []).length);
+  '  ·  Tarjetas: ' + (jsDatos.match(/^\s*\{ f: '/gm) || []).length +
+  '  ·  Alternativas: ' + (jsDatos.match(/^\s*\{ n: [123], q: '/gm) || []).length);
