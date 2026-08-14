@@ -127,7 +127,13 @@ var Estado = (function () {
     return Math.round((new Date(b) - new Date(a)) / 86400000);
   }
 
+  /* Contador de cambios. Sirve para que quien construya índices
+     derivados del estado (Notas, por ejemplo) sepa en O(1) si su
+     copia sigue valiendo, en vez de recalcularla por si acaso. */
+  var revision = 0;
+
   function notificar() {
+    revision += 1;
     oyentes.forEach(function (fn) { fn(d); });
   }
 
@@ -178,6 +184,7 @@ var Estado = (function () {
     ajustes: function () { return d.ajustes; },
     suscribir: function (fn) { oyentes.push(fn); },
     guardar: persistir,
+    revision: function () { return revision; },
 
     guardarAjustes: function (parciales) {
       Object.keys(parciales).forEach(function (k) { d.ajustes[k] = parciales[k]; });

@@ -86,6 +86,11 @@ sincroniza entre el ordenador y el móvil automáticamente. El estado se guarda 
 
 **Límite de 9 KB por propiedad.** `guardarEstado()` ya lo contempla: si el JSON supera los
 8.000 caracteres, lo reparte en fragmentos numerados y `leerEstadoCompleto()` lo reensambla.
+Los fragmentos se escriben con **una sola llamada** (`setProperties`) y se leen con otra
+(`getProperties`): medido sobre un estado de un año de uso son 11 fragmentos, así que
+hacerlo de uno en uno eran 22 viajes de red por guardado. Además se **escribe antes de
+borrar** lo sobrante; al revés, una interrupción a mitad dejaba el progreso destruido en
+lugar de simplemente desactualizado.
 Con 32 temas y 252 tarjetas el estado ronda los 40–60 KB en uso intensivo, así que la
 fragmentación se activará con seguridad. El historial de exámenes, las fuentes y las notas
 suman a esa cifra: son las tres claves que más crecen con el uso.

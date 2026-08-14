@@ -52,43 +52,70 @@ function leerEstado() {
 function guardarEstado(json) {
   // Límite de PropertiesService: 9 KB por valor. Si el progreso
   // crece por encima, se reparte en fragmentos numerados.
+  //
+  // Dos cosas importan aquí, y ninguna es evidente:
+  //
+  // 1. Cada setProperty() es una llamada de red. Al año de uso el
+  //    estado ronda los 80 KB = 11 fragmentos, así que escribirlos
+  //    de uno en uno eran 11 viajes por guardado. setProperties()
+  //    los manda en uno solo.
+  //
+  // 2. El orden importa más que la velocidad. Antes se borraban
+  //    todos los fragmentos ANTES de escribir los nuevos: si el
+  //    script se agotaba o fallaba a mitad, el progreso quedaba
+  //    destruido, no viejo. Ahora se escribe primero y se retira
+  //    lo sobrante después, de modo que en cualquier interrupción
+  //    lo peor que queda es un estado completo, el anterior o el
+  //    nuevo.
   var props = PropertiesService.getUserProperties();
   var TAMANO = 8000;
-
-  limpiarFragmentos_(props);
+  var lote = {};
+  var partes = 0;
 
   if (json.length <= TAMANO) {
-    props.setProperty(CLAVE_ESTADO, json);
-    return true;
+    lote[CLAVE_ESTADO] = json;
+  } else {
+    partes = Math.ceil(json.length / TAMANO);
+    lote[CLAVE_ESTADO] = JSON.stringify({ __fragmentado: true, partes: partes });
+    for (var i = 0; i < partes; i++) {
+      lote[CLAVE_ESTADO + '_' + i] = json.substr(i * TAMANO, TAMANO);
+    }
   }
 
-  var partes = Math.ceil(json.length / TAMANO);
-  var mapa = { __fragmentado: true, partes: partes };
-  props.setProperty(CLAVE_ESTADO, JSON.stringify(mapa));
-  for (var i = 0; i < partes; i++) {
-    props.setProperty(CLAVE_ESTADO + '_' + i, json.substr(i * TAMANO, TAMANO));
-  }
+  // false = no borrar las demás propiedades del usuario.
+  props.setProperties(lote, false);
+
+  // Retirar los fragmentos que sobran de un guardado anterior más
+  // largo. Si el estado encogió, o dejó de estar fragmentado,
+  // partes vale 0 y se van todos.
+  var prefijo = CLAVE_ESTADO + '_';
+  props.getKeys().forEach(function (k) {
+    if (k.indexOf(prefijo) !== 0) return;
+    var n = parseInt(k.slice(prefijo.length), 10);
+    if (isNaN(n) || n >= partes) props.deleteProperty(k);
+  });
   return true;
 }
 
 function limpiarFragmentos_(props) {
-  var todas = props.getProperties();
-  Object.keys(todas).forEach(function (k) {
-    if (k.indexOf(CLAVE_ESTADO + '_') === 0) props.deleteProperty(k);
+  var prefijo = CLAVE_ESTADO + '_';
+  props.getKeys().forEach(function (k) {
+    if (k.indexOf(prefijo) === 0) props.deleteProperty(k);
   });
 }
 
 /** Reensambla el estado si estaba fragmentado. */
 function leerEstadoCompleto() {
   var props = PropertiesService.getUserProperties();
-  var base = props.getProperty(CLAVE_ESTADO);
+  var todas = props.getProperties();   // una sola llamada, no una por fragmento
+  var base = todas[CLAVE_ESTADO];
   if (!base) return null;
   try {
     var posible = JSON.parse(base);
     if (posible && posible.__fragmentado) {
       var out = '';
       for (var i = 0; i < posible.partes; i++) {
-        out += props.getProperty(CLAVE_ESTADO + '_' + i) || '';
+        out += todas[CLAVE_ESTADO + '_' + i] || '';
       }
       return out;
     }
