@@ -33,6 +33,22 @@ UI.registrar('inicio', {
 
     var html = '';
 
+    /* --- consejo principal de Minerva --- */
+    var consejo = (Estado.ajustes().asistente && typeof Minerva !== 'undefined') ? Minerva.principal() : null;
+    if (consejo) {
+      html += '<div class="minerva-linea">' + Minerva.avatar(38) +
+        '<div class="crece"><div class="nombre">Minerva</div>' +
+        '<p><b>' + UI.esc(consejo.titulo) + '.</b> ' + UI.esc(consejo.texto) + '</p>' +
+        (consejo.accion
+          ? '<div class="linea mt"><button class="btn btn-s btn-primario" data-accion="minerva-accion" ' +
+            'data-real="' + consejo.accion.accion + '" ' +
+            'data-carga="' + UI.esc(JSON.stringify(consejo.accion.datos || {})) + '">' +
+            UI.esc(consejo.accion.etiqueta) + ' →</button>' +
+            '<button class="btn btn-s btn-fantasma" data-accion="abrir-minerva">Ver todo</button></div>'
+          : '') +
+        '</div></div>';
+    }
+
     /* --- métricas superiores --- */
     html += '<div class="rejilla c4">' +
       tarjetaMetrica('Estudio de hoy', minHoy + '<span class="tenue" style="font-size:1rem"> / ' + objetivo + ' min</span>',
@@ -64,13 +80,19 @@ UI.registrar('inicio', {
     /* --- dos columnas --- */
     html += '<div class="rejilla c2 mt">';
 
-    /* progreso por módulo */
-    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Avance por módulo</h3>' +
-      '<div class="der"><button class="btn btn-s btn-fantasma" data-accion="ver-temario">Ver temario</button></div></div>';
-    TUTOR.MODULOS.forEach(function (m) {
-      var v = Estado.dominioModulo(m.id);
-      html += '<div class="fila"><div style="font-size:1.2rem">' + m.icono + '</div>' +
-        '<div class="crece"><div class="titulo">' + UI.esc(m.nombre) + '</div>' +
+    /* progreso por área del conocimiento */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Avance por área</h3>' +
+      '<div class="der"><button class="btn btn-s btn-fantasma" data-accion="navegar" data-ruta="areas">Áreas</button>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="ver-temario">Temario</button></div></div>';
+    TUTOR.AREAS.forEach(function (a) {
+      var activa = Estado.areaActiva(a.id);
+      var v = Estado.dominioArea(a.id);
+      var nTemas = TUTOR.temasDeArea(a.id).length;
+      html += '<div class="fila"' + (activa ? '' : ' style="opacity:.45"') + '>' +
+        '<div style="font-size:1.2rem">' + a.icono + '</div>' +
+        '<div class="crece"><div class="titulo">' + UI.esc(a.nombre) +
+        (activa ? '' : ' <span class="etiq">pausada</span>') + '</div>' +
+        '<div class="sub">' + nTemas + ' temas</div>' +
         UI.barra(v, v >= 70 ? 'ok' : v >= 40 ? 'alerta' : 'acento') + '</div>' +
         '<div class="sm tenue">' + v + '%</div></div>';
     });
@@ -141,23 +163,37 @@ function descripcionTiempo(m) {
    ------------------------------------------------------------ */
 UI.registrar('temario', {
   titulo: 'Temario',
-  sub: 'Fisiología y fisiopatología cardiovascular · ' + TUTOR.TEMAS.length + ' temas',
+  sub: function () {
+    return TUTOR.AREAS.length + ' áreas · ' + TUTOR.TEMAS.length + ' temas · ' +
+      TUTOR.todasLasTarjetas().length + ' tarjetas';
+  },
   acciones: function () {
-    return '<button class="btn btn-s" data-accion="generar-plan">Regenerar plan</button>';
+    return '<button class="btn btn-s btn-fantasma" data-accion="navegar" data-ruta="areas">Elegir áreas</button>' +
+      '<button class="btn btn-s" data-accion="generar-plan">Regenerar plan</button>';
   },
   render: function () {
     var html = '';
-    TUTOR.MODULOS.forEach(function (m) {
-      var temas = TUTOR.temasDe(m.id);
-      if (!temas.length) return;
-      var v = Estado.dominioModulo(m.id);
-      html += '<div class="tarjeta"><div class="tarjeta-cab">' +
-        '<div style="font-size:1.4rem">' + m.icono + '</div>' +
-        '<div><h2>' + UI.esc(m.nombre) + '</h2>' +
-        '<div class="sm tenue">' + UI.esc(m.resumen) + '</div></div>' +
-        '<div class="der">' + UI.etiquetaDominio(v) + '</div></div>';
+    TUTOR.AREAS.forEach(function (area) {
+      var modulos = TUTOR.modulosDe(area.id);
+      if (!modulos.length) return;
+      var activa = Estado.areaActiva(area.id);
 
-      temas.forEach(function (t) {
+      html += '<div class="linea entre mt" style="margin-bottom:8px">' +
+        '<h2 style="margin:0">' + area.icono + ' ' + UI.esc(area.nombre) +
+        (activa ? '' : ' <span class="etiq">pausada</span>') + '</h2>' +
+        UI.etiquetaDominio(Estado.dominioArea(area.id)) + '</div>';
+
+      modulos.forEach(function (m) {
+        var temas = TUTOR.temasDe(m.id);
+        if (!temas.length) return;
+        var v = Estado.dominioModulo(m.id);
+        html += '<div class="tarjeta"' + (activa ? '' : ' style="opacity:.55"') + '><div class="tarjeta-cab">' +
+          '<div style="font-size:1.4rem">' + m.icono + '</div>' +
+          '<div><h3>' + UI.esc(m.nombre) + '</h3>' +
+          '<div class="sm tenue">' + UI.esc(m.resumen) + '</div></div>' +
+          '<div class="der">' + UI.etiquetaDominio(v) + '</div></div>';
+
+        temas.forEach(function (t) {
         var d = Estado.dominio(t.id);
         var est = Estado.tema(t.id);
         html += '<div class="fila">' +
@@ -171,12 +207,65 @@ UI.registrar('temario', {
           '</div>' +
           UI.barra(d, d >= 70 ? 'ok' : d >= 40 ? 'alerta' : 'acento') +
           '</div>' +
-          '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
-          '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
-          '</div>';
+            '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
+            '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
+            '</div>';
+        });
+        html += '</div>';
       });
-      html += '</div>';
     });
+    return html;
+  }
+});
+
+/* ------------------------------------------------------------
+   ÁREAS DEL CONOCIMIENTO
+   ------------------------------------------------------------ */
+UI.registrar('areas', {
+  titulo: 'Áreas del conocimiento',
+  sub: 'Activa solo lo que toca ahora: el plan y las tarjetas se ajustan solos',
+  render: function () {
+    var html = '<div class="aviso"><b>Cómo usar esto.</b> Con todas las áreas activas, el plan las intercala, ' +
+      'porque alternar materias distintas retiene mejor que agotar una antes de empezar la siguiente. ' +
+      'Cuando se acerque un examen concreto, desactiva el resto: el plan, las sugerencias y el mazo de tarjetas ' +
+      'se concentrarán solo en lo que necesitas.</div>';
+
+    html += '<div class="rejilla c2 mt">';
+    TUTOR.AREAS.forEach(function (a) {
+      var activa = Estado.areaActiva(a.id);
+      var temas = TUTOR.temasDeArea(a.id);
+      var tarjetas = temas.reduce(function (n, t) { return n + (t.tarjetas || []).length; }, 0);
+      var alto = temas.filter(function (t) { return t.alto; }).length;
+      var v = Estado.dominioArea(a.id);
+
+      html += '<div class="area-tarjeta ' + (activa ? 'activa' : 'inactiva') + '">' +
+        '<div class="cab"><span class="icono">' + a.icono + '</span>' +
+        '<div class="crece"><h3>' + UI.esc(a.nombre) + '</h3>' +
+        '<div class="sm tenue">' + temas.length + ' temas · ' + alto + ' de alto rendimiento · ' + tarjetas + ' tarjetas</div></div>' +
+        '</div>' +
+        '<div class="sm tenue">' + UI.esc(a.resumen) + '</div>' +
+        '<div class="lema">' + UI.esc(a.lema) + '</div>' +
+        UI.barra(v, v >= 70 ? 'ok' : v >= 40 ? 'alerta' : 'acento') +
+        '<div class="linea entre">' +
+        '<span class="sm tenue">Dominio ' + v + '%</span>' +
+        '<div class="linea">' +
+        '<button class="btn btn-s btn-fantasma" data-accion="navegar" data-ruta="temario">Ver temas</button>' +
+        '<button class="btn btn-s ' + (activa ? '' : 'btn-primario') + '" data-accion="alternar-area" data-area="' + a.id + '">' +
+        (activa ? 'Pausar' : 'Activar') + '</button>' +
+        '</div></div></div>';
+    });
+    html += '</div>';
+
+    var activas = Estado.areasActivas().length;
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Efecto en tu plan</h3></div>' +
+      '<div class="rejilla c3">' +
+      tarjetaMetrica('Áreas activas', activas + ' / ' + TUTOR.AREAS.length, '') +
+      tarjetaMetrica('Temas en juego', Estado.temasActivos().length, '') +
+      tarjetaMetrica('Tarjetas en el mazo', Estado.estadisticasTarjetas().total, '') +
+      '</div>' +
+      '<div class="linea mt"><button class="btn btn-primario" data-accion="generar-plan">Regenerar plan con estas áreas</button></div>' +
+      '</div>';
+
     return html;
   }
 });
@@ -190,7 +279,9 @@ UI.registrar('tema', {
     var t = TUTOR.tema(p.tema);
     if (!t) return '';
     var m = TUTOR.modulo(t.modulo);
-    return UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
+    var a = TUTOR.area(m.area);
+    return (a ? a.icono + ' ' + UI.esc(a.nombre) + ' · ' : '') +
+      UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
   },
   acciones: function (p) {
     return '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
@@ -355,7 +446,7 @@ UI.registrar('rendimiento', {
     html += '</div></div>';
 
     /* tabla de temas ordenada por prioridad de repaso */
-    var orden = TUTOR.TEMAS.slice().sort(function (a, b) {
+    var orden = Estado.temasActivos().sort(function (a, b) {
       return Estado.dominio(a.id) - Estado.dominio(b.id);
     });
 
@@ -407,8 +498,13 @@ UI.registrar('prompt', {
   sub: 'Genera la instrucción exacta para NotebookLM, Claude o ChatGPT',
   angosto: true,
   render: function () {
-    var temas = TUTOR.TEMAS.map(function (t) {
-      return '<option value="' + t.id + '">' + UI.esc(t.nombre) + '</option>';
+    var temas = TUTOR.AREAS.map(function (a) {
+      var lista = TUTOR.temasDeArea(a.id);
+      if (!lista.length) return '';
+      return '<optgroup label="' + a.icono + ' ' + UI.esc(a.nombre) + '">' +
+        lista.map(function (t) {
+          return '<option value="' + t.id + '">' + (t.alto ? '🔥 ' : '') + UI.esc(t.nombre) + '</option>';
+        }).join('') + '</optgroup>';
     }).join('');
     var modos = TUTOR.MODOS.map(function (m) {
       return '<option value="' + m.id + '">' + m.icono + ' ' + UI.esc(m.nombre) + '</option>';
@@ -463,6 +559,21 @@ UI.registrar('ajustes', {
       '</div>' +
       '<span class="sm tenue">En automático sigue la preferencia de tu sistema o del sitio donde esté incrustada la app.</span>' +
       '</label></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab">' +
+      (typeof Minerva !== 'undefined' ? Minerva.avatar(30) : '') +
+      '<h3>Minerva</h3></div>' +
+      '<p class="sm tenue">Lee tu progreso real —racha, tarjetas vencidas, brechas repetidas, cumplimiento del plan— ' +
+      'y propone una sola acción concreta cada vez. Si prefieres estudiar sin sugerencias, puedes desactivarla.</p>' +
+      '<div class="conmutador" style="display:inline-flex">' +
+      '<button data-accion="alternar-asistente" data-valor="1" class="' + (a.asistente ? 'sel' : '') + '">Activada</button>' +
+      '<button data-accion="alternar-asistente" data-valor="0" class="' + (!a.asistente ? 'sel' : '') + '">Desactivada</button>' +
+      '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Áreas del conocimiento</h3>' +
+      '<div class="der"><span class="etiq etiq-info">' + Estado.areasActivas().length + ' activas</span></div></div>' +
+      '<p class="sm tenue">Activa o pausa áreas completas para concentrar el plan y el mazo de tarjetas en lo que toca ahora.</p>' +
+      '<button class="btn" data-accion="navegar" data-ruta="areas">Gestionar áreas</button></div>';
 
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Minutos disponibles por día</h3>' +
       '<div class="der sm tenue">Base del plan</div></div>' +

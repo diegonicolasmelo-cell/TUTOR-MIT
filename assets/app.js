@@ -12,6 +12,7 @@ var NAVEGACION = [
   { ruta: 'tarjetas', icono: '🔁', nombre: 'Tarjetas', movil: true, globo: 'tarjetas' },
   { grupo: 'Organización' },
   { ruta: 'plan', icono: '🗓️', nombre: 'Plan', movil: true },
+  { ruta: 'areas', icono: '🧭', nombre: 'Áreas' },
   { ruta: 'temario', icono: '📚', nombre: 'Temario' },
   { ruta: 'rendimiento', icono: '📊', nombre: 'Rendimiento', movil: true },
   { grupo: 'Herramientas' },
@@ -46,15 +47,19 @@ function construirPrompt(idTema, idModo, minutos) {
   var dom = Estado.dominio(idTema);
   var brechas = Estado.brechasAbiertas().filter(function (b) { return b.tema === idTema; });
 
+  var area = TUTOR.area(TUTOR.areaDeTema(idTema)) || { nombre: 'Medicina' };
+  var modulo = TUTOR.modulo(t.modulo) || { nombre: '' };
+
   var L = [];
-  L.push('# TUTOR DE FISIOLOGÍA Y FISIOPATOLOGÍA CARDIOVASCULAR');
+  L.push('# TUTOR DE ' + area.nombre.toUpperCase() + ' — FISIOLOGÍA Y FISIOPATOLOGÍA');
   L.push('');
   L.push('## 1. ROL');
-  L.push('Actúa como tutor experto en fisiología y fisiopatología cardiovascular para estudiantes de Medicina, con nivel académico equivalente al de un docente universitario clínico.');
+  L.push('Actúa como tutor experto en ' + area.nombre.toLowerCase() + ' (fisiología y fisiopatología) para estudiantes de Medicina, con nivel académico equivalente al de un docente universitario clínico.');
   L.push('Tu objetivo no es entregarme información, sino ayudarme a comprender, integrar, razonar y recordar.');
   L.push('Tengo bases sólidas de anatomía, fisiología general y bioquímica. No expliques lo elemental salvo que detectes una brecha conceptual que impida comprender el tema.');
   L.push('');
   L.push('## 2. CONTEXTO DE ESTA SESIÓN');
+  L.push('- Área: ' + area.nombre + (modulo.nombre ? ' → ' + modulo.nombre : ''));
   L.push('- Tema: ' + t.nombre + (t.alto ? '  [ALTO RENDIMIENTO]' : ''));
   L.push('- Tiempo disponible: ' + minutos + ' minutos');
   L.push('- Modo solicitado: ' + m.nombre + ' — ' + m.descripcion);
@@ -111,7 +116,14 @@ function construirPrompt(idTema, idModo, minutos) {
   L.push('Prioriza «¿qué ocurriría si…?», «¿cuál es el mecanismo que explica…?», «¿qué variable cambió primero?», «¿qué compensación esperarías?», «¿qué pasa si ese mecanismo falla?».');
   L.push('');
   L.push('## 9. FUENTES');
-  L.push('Usa conceptos compatibles con Guyton & Hall, Boron & Boulpaep, Costanzo, Harrison y Braunwald. Si hay diferencias relevantes entre fuentes, indícalas. No inventes referencias.');
+  var FUENTES = {
+    cardio: 'Guyton & Hall, Boron & Boulpaep, Costanzo, Harrison y Braunwald',
+    respiratorio: 'West (Fisiología respiratoria), Guyton & Hall, Boron & Boulpaep y Harrison',
+    renal: 'Rose & Post (Trastornos de electrolitos y ácido-base), Brenner, Guyton & Hall y Harrison',
+    neuro: 'Kandel (Principios de neurociencia), Guyton & Hall, Ropper (Adams y Victor) y Harrison',
+    farmaco: 'Goodman & Gilman, Katzung, Rang & Dale y guías de sociedades de medicina intensiva'
+  };
+  L.push('Usa conceptos compatibles con ' + (FUENTES[area.id] || FUENTES.cardio) + '. Si hay diferencias relevantes entre fuentes, indícalas. No inventes referencias.');
   L.push('');
   L.push('## 10. ARRANQUE');
   L.push('Empieza directamente por lo más importante del tema indicado. No me preguntes de nuevo el tema ni el tiempo: ya están arriba.');
@@ -271,6 +283,50 @@ UI.accion('tema-visual', function (d) {
   UI.refrescar();
 });
 
+/* --- áreas del conocimiento --- */
+UI.accion('alternar-area', function (d) {
+  var ok = Estado.alternarArea(d.area);
+  if (!ok) {
+    UI.brindis('Debe quedar al menos un área activa');
+    return;
+  }
+  Estado.generarPlan(14);
+  UI.refrescar();
+  UI.actualizarGlobos();
+  var a = TUTOR.area(d.area);
+  UI.brindis(a.nombre + (Estado.areaActiva(d.area) ? ' activada' : ' pausada') + ' · plan regenerado');
+});
+
+/* --- Minerva --- */
+UI.accion('abrir-minerva', function () { Minerva.abrir(); });
+
+UI.accion('minerva-accion', function (d) {
+  UI.cerrarModal();
+  var datos = {};
+  try { datos = JSON.parse(d.carga || '{}'); } catch (e) { datos = {}; }
+  var real = d.real;
+  if (real === 'ir-tarjetas') { Mazo.cargar(null); UI.ir('tarjetas'); return; }
+  if (real === 'arranque-rapido') {
+    var s = Estado.sugerencia();
+    var min = parseInt(datos.min, 10) || 20;
+    Sesion.iniciar(s.tema, min <= 10 ? 'repaso' : min <= 30 ? 'comprender' : 'intensivo', min);
+    return;
+  }
+  if (real === 'estudiar-tema') { UI.ir('preparar', { tema: datos.tema }); return; }
+  if (real === 'abrir-preparar') { UI.ir('preparar'); return; }
+  if (real === 'navegar') { UI.ir(datos.ruta || 'inicio'); return; }
+  UI.ir('inicio');
+});
+
+UI.accion('abrir-preparar', function () { UI.ir('preparar'); });
+
+UI.accion('alternar-asistente', function (d) {
+  Estado.guardarAjustes({ asistente: d.valor === '1' });
+  Minerva.pintarBoton();
+  UI.refrescar();
+  UI.brindis(d.valor === '1' ? 'Minerva activada' : 'Minerva desactivada');
+});
+
 /* --- brechas --- */
 UI.accion('cerrar-brecha', function (d) {
   Estado.resolverBrecha(parseInt(d.i, 10));
@@ -398,7 +454,11 @@ function arrancar() {
 
     UI.ir('inicio');
     UI.actualizarGlobos();
-    Estado.suscribir(function () { UI.actualizarGlobos(); });
+    Minerva.pintarBoton();
+    Estado.suscribir(function () {
+      UI.actualizarGlobos();
+      Minerva.pintarBoton();
+    });
   });
 }
 

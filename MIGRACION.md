@@ -86,8 +86,8 @@ sincroniza entre el ordenador y el móvil automáticamente. El estado se guarda 
 
 **Límite de 9 KB por propiedad.** `guardarEstado()` ya lo contempla: si el JSON supera los
 8.000 caracteres, lo reparte en fragmentos numerados y `leerEstadoCompleto()` lo reensambla.
-Con 18 temas y 136 tarjetas el estado ronda los 20–30 KB en uso intensivo, así que la
-fragmentación se activará.
+Con 32 temas y 252 tarjetas el estado ronda los 40–60 KB en uso intensivo, así que la
+fragmentación se activará con seguridad.
 
 **Migrar el progreso existente.** Antes de cambiar: `Ajustes → Exportar progreso` (copia un
 JSON). Después, en la versión de Apps Script: `Ajustes → Importar`.
@@ -138,3 +138,9 @@ google.script.run
 Para añadir o corregir temas, editar el archivo de datos correspondiente en `assets/`,
 regenerar con `node herramientas/construir.js` y pegar de nuevo **solo** `Datos.html` en el
 proyecto. El resto de archivos no cambia mientras no se toque la lógica.
+
+Para **añadir un área nueva** hacen falta tres pasos: añadir la entrada en `TUTOR.AREAS`
+(`assets/datos-nucleo.js`), añadir sus módulos en `TUTOR.MODULOS` con el campo `area`, y crear
+un archivo `datos-<area>.js` con los temas, registrándolo en `SCRIPTS_DATOS` dentro de
+`herramientas/construir.js` y en los `<script>` de `index.html`. La interfaz, el planificador,
+el mazo y Minerva recogen el área nueva automáticamente.

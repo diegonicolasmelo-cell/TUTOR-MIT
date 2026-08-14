@@ -15,33 +15,139 @@ TUTOR.registrarTemas = function (lista) {
 };
 
 /* ------------------------------------------------------------
+   ÁREAS DEL CONOCIMIENTO
+   Nivel superior del temario. Cada área agrupa módulos, y cada
+   módulo agrupa temas. Se pueden activar y desactivar para
+   concentrar el plan en lo que toca ahora (p. ej. un examen).
+   ------------------------------------------------------------ */
+TUTOR.AREAS = [
+  {
+    id: 'cardio',
+    nombre: 'Cardiovascular',
+    icono: '🫀',
+    resumen: 'Hemodinamia, electrofisiología, regulación de la presión y fisiopatología clínica.',
+    lema: 'Cuatro determinantes explican casi toda la patología aguda.'
+  },
+  {
+    id: 'respiratorio',
+    nombre: 'Respiratorio',
+    icono: '🫁',
+    resumen: 'Mecánica ventilatoria, intercambio gaseoso, transporte de gases y fallo respiratorio.',
+    lema: 'Oxigenar y ventilar son dos problemas distintos con soluciones distintas.'
+  },
+  {
+    id: 'renal',
+    nombre: 'Renal y medio interno',
+    icono: '⚗️',
+    resumen: 'Filtrado glomerular, manejo tubular, equilibrio ácido-base, potasio y fracaso renal.',
+    lema: 'El riñón defiende el volumen aunque tenga que sacrificar todo lo demás.'
+  },
+  {
+    id: 'neuro',
+    nombre: 'Neurofisiología',
+    icono: '🧠',
+    resumen: 'Potencial de membrana, sinapsis, perfusión cerebral, presión intracraneal y conciencia.',
+    lema: 'El cráneo es una caja rígida: todo lo que entra obliga a que algo salga.'
+  },
+  {
+    id: 'farmaco',
+    nombre: 'Farmacología del paciente crítico',
+    icono: '💊',
+    resumen: 'Farmacocinética alterada, vasoactivos e inotrópicos, sedoanalgesia y antimicrobianos.',
+    lema: 'Elige el fármaco por el receptor que quieres tocar, no por costumbre.'
+  }
+];
+
+/* ------------------------------------------------------------
    MÓDULOS
-   El orden define la progresión sugerida del temario.
+   El orden define la progresión sugerida dentro de cada área.
    ------------------------------------------------------------ */
 TUTOR.MODULOS = [
+  /* --- Cardiovascular --- */
   {
     id: 'hemodinamia',
+    area: 'cardio',
     nombre: 'Fundamentos hemodinámicos',
     icono: '🫀',
     resumen: 'Gasto cardíaco, precarga, poscarga, contractilidad y retorno venoso. Es la gramática de todo lo demás.'
   },
   {
     id: 'electro',
+    area: 'cardio',
     nombre: 'Electrofisiología y ECG',
     icono: '⚡',
     resumen: 'Potencial de acción, acoplamiento excitación-contracción, génesis del ECG y arritmias.'
   },
   {
     id: 'regulacion',
+    area: 'cardio',
     nombre: 'Regulación y presión arterial',
     icono: '🎚️',
     resumen: 'Barorreflejo, sistema nervioso autónomo, SRAA, resistencia vascular y perfusión coronaria.'
   },
   {
     id: 'fisiopato',
+    area: 'cardio',
     nombre: 'Fisiopatología clínica',
     icono: '🩺',
     resumen: 'Isquemia, insuficiencia cardíaca, shock, hipertensión y valvulopatías desde el mecanismo.'
+  },
+
+  /* --- Respiratorio --- */
+  {
+    id: 'mecanica-vent',
+    area: 'respiratorio',
+    nombre: 'Mecánica e intercambio',
+    icono: '🌬️',
+    resumen: 'Presiones, compliance, resistencia, relación ventilación-perfusión y transporte de gases.'
+  },
+  {
+    id: 'fallo-resp',
+    area: 'respiratorio',
+    nombre: 'Insuficiencia respiratoria',
+    icono: '🆘',
+    resumen: 'Los cinco mecanismos de hipoxemia, el fallo ventilatorio, el SDRA y la ventilación mecánica.'
+  },
+
+  /* --- Renal y medio interno --- */
+  {
+    id: 'funcion-renal',
+    area: 'renal',
+    nombre: 'Función renal',
+    icono: '💧',
+    resumen: 'Filtrado glomerular, autorregulación, manejo tubular del sodio y del agua.'
+  },
+  {
+    id: 'medio-interno',
+    area: 'renal',
+    nombre: 'Medio interno',
+    icono: '⚖️',
+    resumen: 'Equilibrio ácido-base con enfoque sistemático, potasio y fracaso renal agudo.'
+  },
+
+  /* --- Neurofisiología --- */
+  {
+    id: 'neurofisio',
+    area: 'neuro',
+    nombre: 'Excitabilidad y sinapsis',
+    icono: '⚡',
+    resumen: 'Potencial de membrana, conducción del impulso y transmisión sináptica.'
+  },
+  {
+    id: 'neuro-critico',
+    area: 'neuro',
+    nombre: 'Perfusión cerebral y conciencia',
+    icono: '🧠',
+    resumen: 'Doctrina de Monro-Kellie, presión intracraneal, autorregulación cerebral y coma.'
+  },
+
+  /* --- Farmacología crítica --- */
+  {
+    id: 'farmaco-critico',
+    area: 'farmaco',
+    nombre: 'Fármacos en el paciente crítico',
+    icono: '💉',
+    resumen: 'Farmacocinética alterada, vasoactivos, inotrópicos y sedoanalgesia razonada.'
   }
 ];
 
@@ -160,6 +266,8 @@ TUTOR.NIVELES = {
 TUTOR.AJUSTES_DEFECTO = {
   nombre: 'Diego',
   tema: 'auto',
+  areasActivas: TUTOR.AREAS.map(function (a) { return a.id; }),
+  asistente: true,
   minutosPorDia: { 0: 30, 1: 25, 2: 25, 3: 25, 4: 25, 5: 20, 6: 45 }, // 0 = domingo
   objetivoDiario: 25,
   maxTarjetasDia: 40,
@@ -225,6 +333,32 @@ TUTOR.modo = function (id) {
 
 TUTOR.temasDe = function (idModulo) {
   return TUTOR.TEMAS.filter(function (t) { return t.modulo === idModulo; });
+};
+
+TUTOR.area = function (id) {
+  for (var i = 0; i < TUTOR.AREAS.length; i++) {
+    if (TUTOR.AREAS[i].id === id) return TUTOR.AREAS[i];
+  }
+  return null;
+};
+
+TUTOR.modulosDe = function (idArea) {
+  return TUTOR.MODULOS.filter(function (m) { return m.area === idArea; });
+};
+
+/* Área a la que pertenece un tema, a través de su módulo. */
+TUTOR.areaDeTema = function (idTema) {
+  var t = TUTOR.tema(idTema);
+  if (!t) return null;
+  var m = TUTOR.modulo(t.modulo);
+  return m ? m.area : null;
+};
+
+TUTOR.temasDeArea = function (idArea) {
+  return TUTOR.TEMAS.filter(function (t) {
+    var m = TUTOR.modulo(t.modulo);
+    return m && m.area === idArea;
+  });
 };
 
 /* Todas las tarjetas del temario, con su tema de origen. */

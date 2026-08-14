@@ -224,11 +224,57 @@ var Estado = (function () {
       return Math.round(suma / temas.length);
     },
 
-    dominioGlobal: function () {
-      if (!TUTOR.TEMAS.length) return 0;
+    dominioArea: function (idArea) {
+      var temas = TUTOR.temasDeArea(idArea);
+      if (!temas.length) return 0;
       var suma = 0;
-      TUTOR.TEMAS.forEach(function (t) { suma += Estado.dominio(t.id); });
-      return Math.round(suma / TUTOR.TEMAS.length);
+      temas.forEach(function (t) { suma += Estado.dominio(t.id); });
+      return Math.round(suma / temas.length);
+    },
+
+    /* El dominio global solo cuenta las áreas activas: si Diego
+       ha desactivado un área para concentrarse en un examen, no
+       tiene sentido que su progreso se diluya con ella. */
+    dominioGlobal: function () {
+      var temas = Estado.temasActivos();
+      if (!temas.length) return 0;
+      var suma = 0;
+      temas.forEach(function (t) { suma += Estado.dominio(t.id); });
+      return Math.round(suma / temas.length);
+    },
+
+    /* ---------- áreas del conocimiento ---------- */
+    areasActivas: function () {
+      var a = d.ajustes.areasActivas;
+      if (!a || !a.length) return TUTOR.AREAS.map(function (x) { return x.id; });
+      return a;
+    },
+
+    areaActiva: function (idArea) {
+      return Estado.areasActivas().indexOf(idArea) >= 0;
+    },
+
+    alternarArea: function (idArea) {
+      var activas = Estado.areasActivas().slice();
+      var i = activas.indexOf(idArea);
+      if (i >= 0) {
+        if (activas.length === 1) return false;   // nunca dejar el temario vacío
+        activas.splice(i, 1);
+      } else {
+        activas.push(idArea);
+      }
+      d.ajustes.areasActivas = activas;
+      persistir();
+      notificar();
+      return true;
+    },
+
+    /* Temas de las áreas actualmente activas. */
+    temasActivos: function () {
+      var activas = Estado.areasActivas();
+      return TUTOR.TEMAS.filter(function (t) {
+        return activas.indexOf(TUTOR.areaDeTema(t.id)) >= 0;
+      });
     },
 
     registrarRespuesta: function (idTema, acierto) {
@@ -302,7 +348,10 @@ var Estado = (function () {
 
     tarjetasVencidas: function () {
       var hoy = hoyISO();
-      var todas = TUTOR.todasLasTarjetas();
+      var activas = Estado.areasActivas();
+      var todas = TUTOR.todasLasTarjetas().filter(function (c) {
+        return activas.indexOf(TUTOR.areaDeTema(c.tema)) >= 0;
+      });
       var vencidas = [], nuevas = [];
       todas.forEach(function (c) {
         var e = d.tarjetas[c.id];
@@ -354,7 +403,10 @@ var Estado = (function () {
     },
 
     estadisticasTarjetas: function () {
-      var todas = TUTOR.todasLasTarjetas();
+      var activas = Estado.areasActivas();
+      var todas = TUTOR.todasLasTarjetas().filter(function (c) {
+        return activas.indexOf(TUTOR.areaDeTema(c.tema)) >= 0;
+      });
       var hoy = hoyISO();
       var r = { total: todas.length, nuevas: 0, aprendiendo: 0, maduras: 0, vencenHoy: 0 };
       todas.forEach(function (c) {
@@ -389,11 +441,36 @@ var Estado = (function () {
     generarPlan: function (dias) {
       dias = dias || 14;
       var plan = {};
-      var pendientes = TUTOR.TEMAS.slice().sort(function (a, b) {
-        var da = Estado.dominio(a.id), db = Estado.dominio(b.id);
-        if (a.alto !== b.alto) return a.alto ? -1 : 1;   // alto rendimiento primero
-        return da - db;                                   // menor dominio primero
+
+      /* Prioridad dentro de cada área: alto rendimiento primero y,
+         a igualdad, menor dominio. */
+      var porArea = {};
+      Estado.temasActivos().forEach(function (t) {
+        var area = TUTOR.areaDeTema(t.id);
+        if (!porArea[area]) porArea[area] = [];
+        porArea[area].push(t);
       });
+      Object.keys(porArea).forEach(function (k) {
+        porArea[k].sort(function (a, b) {
+          if (a.alto !== b.alto) return a.alto ? -1 : 1;
+          return Estado.dominio(a.id) - Estado.dominio(b.id);
+        });
+      });
+
+      /* Intercalado entre áreas: alternar materias distintas retiene
+         mejor que agotar una antes de pasar a la siguiente, porque
+         obliga a discriminar en lugar de reconocer por contexto. */
+      var pendientes = [];
+      var areas = Object.keys(porArea);
+      var quedan = true;
+      for (var vuelta = 0; quedan; vuelta++) {
+        quedan = false;
+        for (var a = 0; a < areas.length; a++) {
+          var lista = porArea[areas[a]];
+          if (lista[vuelta]) { pendientes.push(lista[vuelta]); quedan = true; }
+        }
+      }
+      if (!pendientes.length) { d.plan = {}; persistir(); return {}; }
 
       var cola = pendientes.slice();
       for (var i = 0; i < dias; i++) {
@@ -437,10 +514,11 @@ var Estado = (function () {
       if (bloques.length) {
         return { tema: bloques[0].tema, minutos: bloques[0].minutos, origen: 'plan' };
       }
-      var candidatos = TUTOR.TEMAS.slice().sort(function (a, b) {
+      var candidatos = Estado.temasActivos().sort(function (a, b) {
         if (a.alto !== b.alto) return a.alto ? -1 : 1;
         return Estado.dominio(a.id) - Estado.dominio(b.id);
       });
+      if (!candidatos.length) candidatos = TUTOR.TEMAS.slice();
       return {
         tema: candidatos[0].id,
         minutos: Math.min(Estado.minutosDisponibles(hoy) || 25, 30),

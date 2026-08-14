@@ -225,11 +225,57 @@ var Estado = (function () {
       return Math.round(suma / temas.length);
     },
 
-    dominioGlobal: function () {
-      if (!TUTOR.TEMAS.length) return 0;
+    dominioArea: function (idArea) {
+      var temas = TUTOR.temasDeArea(idArea);
+      if (!temas.length) return 0;
       var suma = 0;
-      TUTOR.TEMAS.forEach(function (t) { suma += Estado.dominio(t.id); });
-      return Math.round(suma / TUTOR.TEMAS.length);
+      temas.forEach(function (t) { suma += Estado.dominio(t.id); });
+      return Math.round(suma / temas.length);
+    },
+
+    /* El dominio global solo cuenta las áreas activas: si Diego
+       ha desactivado un área para concentrarse en un examen, no
+       tiene sentido que su progreso se diluya con ella. */
+    dominioGlobal: function () {
+      var temas = Estado.temasActivos();
+      if (!temas.length) return 0;
+      var suma = 0;
+      temas.forEach(function (t) { suma += Estado.dominio(t.id); });
+      return Math.round(suma / temas.length);
+    },
+
+    /* ---------- áreas del conocimiento ---------- */
+    areasActivas: function () {
+      var a = d.ajustes.areasActivas;
+      if (!a || !a.length) return TUTOR.AREAS.map(function (x) { return x.id; });
+      return a;
+    },
+
+    areaActiva: function (idArea) {
+      return Estado.areasActivas().indexOf(idArea) >= 0;
+    },
+
+    alternarArea: function (idArea) {
+      var activas = Estado.areasActivas().slice();
+      var i = activas.indexOf(idArea);
+      if (i >= 0) {
+        if (activas.length === 1) return false;   // nunca dejar el temario vacío
+        activas.splice(i, 1);
+      } else {
+        activas.push(idArea);
+      }
+      d.ajustes.areasActivas = activas;
+      persistir();
+      notificar();
+      return true;
+    },
+
+    /* Temas de las áreas actualmente activas. */
+    temasActivos: function () {
+      var activas = Estado.areasActivas();
+      return TUTOR.TEMAS.filter(function (t) {
+        return activas.indexOf(TUTOR.areaDeTema(t.id)) >= 0;
+      });
     },
 
     registrarRespuesta: function (idTema, acierto) {
@@ -303,7 +349,10 @@ var Estado = (function () {
 
     tarjetasVencidas: function () {
       var hoy = hoyISO();
-      var todas = TUTOR.todasLasTarjetas();
+      var activas = Estado.areasActivas();
+      var todas = TUTOR.todasLasTarjetas().filter(function (c) {
+        return activas.indexOf(TUTOR.areaDeTema(c.tema)) >= 0;
+      });
       var vencidas = [], nuevas = [];
       todas.forEach(function (c) {
         var e = d.tarjetas[c.id];
@@ -355,7 +404,10 @@ var Estado = (function () {
     },
 
     estadisticasTarjetas: function () {
-      var todas = TUTOR.todasLasTarjetas();
+      var activas = Estado.areasActivas();
+      var todas = TUTOR.todasLasTarjetas().filter(function (c) {
+        return activas.indexOf(TUTOR.areaDeTema(c.tema)) >= 0;
+      });
       var hoy = hoyISO();
       var r = { total: todas.length, nuevas: 0, aprendiendo: 0, maduras: 0, vencenHoy: 0 };
       todas.forEach(function (c) {
@@ -390,11 +442,36 @@ var Estado = (function () {
     generarPlan: function (dias) {
       dias = dias || 14;
       var plan = {};
-      var pendientes = TUTOR.TEMAS.slice().sort(function (a, b) {
-        var da = Estado.dominio(a.id), db = Estado.dominio(b.id);
-        if (a.alto !== b.alto) return a.alto ? -1 : 1;   // alto rendimiento primero
-        return da - db;                                   // menor dominio primero
+
+      /* Prioridad dentro de cada área: alto rendimiento primero y,
+         a igualdad, menor dominio. */
+      var porArea = {};
+      Estado.temasActivos().forEach(function (t) {
+        var area = TUTOR.areaDeTema(t.id);
+        if (!porArea[area]) porArea[area] = [];
+        porArea[area].push(t);
       });
+      Object.keys(porArea).forEach(function (k) {
+        porArea[k].sort(function (a, b) {
+          if (a.alto !== b.alto) return a.alto ? -1 : 1;
+          return Estado.dominio(a.id) - Estado.dominio(b.id);
+        });
+      });
+
+      /* Intercalado entre áreas: alternar materias distintas retiene
+         mejor que agotar una antes de pasar a la siguiente, porque
+         obliga a discriminar en lugar de reconocer por contexto. */
+      var pendientes = [];
+      var areas = Object.keys(porArea);
+      var quedan = true;
+      for (var vuelta = 0; quedan; vuelta++) {
+        quedan = false;
+        for (var a = 0; a < areas.length; a++) {
+          var lista = porArea[areas[a]];
+          if (lista[vuelta]) { pendientes.push(lista[vuelta]); quedan = true; }
+        }
+      }
+      if (!pendientes.length) { d.plan = {}; persistir(); return {}; }
 
       var cola = pendientes.slice();
       for (var i = 0; i < dias; i++) {
@@ -438,10 +515,11 @@ var Estado = (function () {
       if (bloques.length) {
         return { tema: bloques[0].tema, minutos: bloques[0].minutos, origen: 'plan' };
       }
-      var candidatos = TUTOR.TEMAS.slice().sort(function (a, b) {
+      var candidatos = Estado.temasActivos().sort(function (a, b) {
         if (a.alto !== b.alto) return a.alto ? -1 : 1;
         return Estado.dominio(a.id) - Estado.dominio(b.id);
       });
+      if (!candidatos.length) candidatos = TUTOR.TEMAS.slice();
       return {
         tema: candidatos[0].id,
         minutos: Math.min(Estado.minutosDisponibles(hoy) || 25, 30),
@@ -619,6 +697,8 @@ var UI = (function () {
 
     if (r.despues) r.despues(parametros);
     marcarNavegacion();
+    /* Minerva reevalúa su consejo en cada cambio de vista. */
+    if (typeof Minerva !== 'undefined') Minerva.pintarBoton();
   }
 
   function refrescar() { pintar(); }
@@ -710,6 +790,361 @@ var Crono = (function () {
 
 
 /* ============================================================
+   MINERVA — asistente de estudio
+   ------------------------------------------------------------
+   El búho de Minerva emprende su vuelo al caer el crepúsculo
+   (Hegel). Apropiado para quien estudia después del turno.
+
+   No es un adorno: lee el estado real (racha, tarjetas vencidas,
+   brechas, precisión por nivel, decaimiento por área) y produce
+   consejos priorizados con UNA acción concreta cada uno.
+   ============================================================ */
+
+var Minerva = (function () {
+
+  /* ------------------------------------------------------------
+     Avatar en SVG. Hereda color de los tokens del tema, de modo
+     que funciona igual en claro y en oscuro.
+     ------------------------------------------------------------ */
+  function avatar(tamano, clase) {
+    var t = tamano || 40;
+    return '<svg class="buho ' + (clase || '') + '" viewBox="0 0 64 64" width="' + t + '" height="' + t + '" ' +
+      'role="img" aria-label="Minerva, tu asistente de estudio">' +
+      /* penachos */
+      '<path d="M14 20 L18 8 L26 16 Z" fill="var(--buho-cuerpo)"/>' +
+      '<path d="M50 20 L46 8 L38 16 Z" fill="var(--buho-cuerpo)"/>' +
+      /* cuerpo */
+      '<ellipse cx="32" cy="36" rx="22" ry="24" fill="var(--buho-cuerpo)"/>' +
+      /* pecho */
+      '<ellipse cx="32" cy="42" rx="14" ry="16" fill="var(--buho-pecho)" opacity=".55"/>' +
+      /* discos faciales */
+      '<circle cx="23" cy="30" r="10" fill="var(--buho-cara)"/>' +
+      '<circle cx="41" cy="30" r="10" fill="var(--buho-cara)"/>' +
+      /* ojos */
+      '<g class="buho-ojos">' +
+      '<circle cx="23" cy="30" r="6" fill="var(--buho-ojo)"/>' +
+      '<circle cx="41" cy="30" r="6" fill="var(--buho-ojo)"/>' +
+      '<circle cx="25" cy="28" r="2" fill="#fff" opacity=".9"/>' +
+      '<circle cx="43" cy="28" r="2" fill="#fff" opacity=".9"/>' +
+      '</g>' +
+      /* párpados para el parpadeo */
+      '<g class="buho-parpados">' +
+      '<circle cx="23" cy="30" r="6.4" fill="var(--buho-cara)"/>' +
+      '<circle cx="41" cy="30" r="6.4" fill="var(--buho-cara)"/>' +
+      '</g>' +
+      /* pico */
+      '<path d="M32 33 L28 40 L36 40 Z" fill="var(--buho-pico)"/>' +
+      /* alas */
+      '<path d="M12 32 Q8 44 16 52 Q14 42 16 34 Z" fill="var(--buho-ala)"/>' +
+      '<path d="M52 32 Q56 44 48 52 Q50 42 48 34 Z" fill="var(--buho-ala)"/>' +
+      /* patas */
+      '<path d="M27 58 v3 M31 58 v3 M33 58 v3 M37 58 v3" stroke="var(--buho-pico)" stroke-width="2" stroke-linecap="round"/>' +
+      '</svg>';
+  }
+
+  /* ------------------------------------------------------------
+     Saludo según la hora. Diego estudia de noche, después del
+     turno: el mensaje lo reconoce en lugar de ignorarlo.
+     ------------------------------------------------------------ */
+  function saludo() {
+    var h = new Date().getHours();
+    var n = Estado.ajustes().nombre;
+    if (h < 6) return '¿Guardia o insomnio, ' + n + '? A esta hora conviene repaso corto, no tema nuevo.';
+    if (h < 12) return 'Buenos días, ' + n + '. La mañana rinde bien para comprender mecanismos.';
+    if (h < 18) return 'Buenas tardes, ' + n + '. ¿Cuánto tiempo real tienes ahora?';
+    if (h < 22) return 'Buenas noches, ' + n + '. Es la franja en la que más has estudiado.';
+    return 'Tarde, ' + n + '. Si vienes cansado, quince minutos de tarjetas valen más que forzar un tema nuevo.';
+  }
+
+  /* ------------------------------------------------------------
+     MOTOR DE REGLAS
+     Cada regla devuelve null o un consejo con una sola acción.
+     Prioridad mayor = más arriba.
+     ------------------------------------------------------------ */
+  var REGLAS = [
+
+    /* --- 1. Tarjetas vencidas acumuladas --- */
+    function () {
+      var s = Estado.estadisticasTarjetas();
+      if (s.vencenHoy < 1) return null;
+      var urgente = s.vencenHoy >= 25;
+      return {
+        id: 'tarjetas',
+        prioridad: urgente ? 95 : 60,
+        tono: urgente ? 'alerta' : 'info',
+        titulo: s.vencenHoy + ' tarjetas esperan hoy',
+        texto: urgente
+          ? 'Se te han acumulado. Si las dejas crecer, el mazo se vuelve una deuda y acabas abandonándolo. Haz una tanda ahora aunque no las termines todas: el algoritmo reorganiza el resto.'
+          : 'Es lo más rentable por minuto invertido que puedes hacer ahora mismo. Se recuperan en cualquier hueco, también desde el móvil.',
+        accion: { etiqueta: 'Repasar ahora', accion: 'ir-tarjetas' }
+      };
+    },
+
+    /* --- 2. Racha en riesgo --- */
+    function () {
+      var d = Estado.datos();
+      var hoy = Estado.hoyISO();
+      var minHoy = Estado.minutosDe(hoy);
+      if (minHoy > 0) return null;
+      if (d.racha.dias < 2) return null;
+      var hora = new Date().getHours();
+      if (hora < 17) return null;
+      return {
+        id: 'racha',
+        prioridad: 80,
+        tono: 'alerta',
+        titulo: 'Tu racha de ' + d.racha.dias + ' días se corta hoy',
+        texto: 'No hace falta una sesión completa. Diez minutos de repaso mantienen la continuidad, y la continuidad es lo que realmente construye la memoria: importa más la frecuencia que la duración.',
+        accion: { etiqueta: 'Sesión de 10 min', accion: 'arranque-rapido', datos: { min: 10 } }
+      };
+    },
+
+    /* --- 3. Brechas repetidas en un mismo tema --- */
+    function () {
+      var abiertas = Estado.brechasAbiertas();
+      if (abiertas.length < 3) return null;
+      var cuenta = {};
+      abiertas.forEach(function (b) { cuenta[b.tema] = (cuenta[b.tema] || 0) + 1; });
+      var peor = null, max = 0;
+      Object.keys(cuenta).forEach(function (k) {
+        if (cuenta[k] > max) { max = cuenta[k]; peor = k; }
+      });
+      if (max < 2) return null;
+      var t = TUTOR.tema(peor);
+      if (!t) return null;
+      return {
+        id: 'brechas',
+        prioridad: 85,
+        tono: 'alerta',
+        titulo: max + ' brechas abiertas en «' + t.nombre + '»',
+        texto: 'Cuando las brechas se concentran en un tema, no es despiste: hay un concepto de base que no está sujeto. Vuelve a él en modo comprender y detente en la fase Feynman, que es donde se ve exactamente qué falta.',
+        accion: { etiqueta: 'Reforzar el tema', accion: 'estudiar-tema', datos: { tema: peor } }
+      };
+    },
+
+    /* --- 4. Área sin tocar --- */
+    function () {
+      /* No tiene sentido antes de la primera sesión: ahí manda la
+         regla de arranque, y decir que "todo está sin abrir" sobra. */
+      if (Estado.datos().sesiones.length === 0) return null;
+      var activas = Estado.areasActivas();
+      if (activas.length < 2) return null;
+      var candidata = null;
+      activas.forEach(function (id) {
+        if (candidata) return;
+        var temas = TUTOR.temasDeArea(id);
+        if (!temas.length) return;
+        var tocada = temas.some(function (t) { return Estado.tema(t.id).vistas > 0; });
+        if (!tocada) candidata = id;
+      });
+      if (!candidata) return null;
+      var a = TUTOR.area(candidata);
+      var primero = TUTOR.temasDeArea(candidata).filter(function (t) { return t.alto; })[0] ||
+        TUTOR.temasDeArea(candidata)[0];
+      return {
+        id: 'area-nueva',
+        prioridad: 40,
+        tono: 'info',
+        titulo: a.icono + ' ' + a.nombre + ' sigue sin abrir',
+        texto: a.lema + ' Intercalar áreas distintas rinde más que agotar una antes de pasar a la siguiente: el contraste entre materias mejora la discriminación y la retención.',
+        accion: { etiqueta: 'Empezar por lo esencial', accion: 'estudiar-tema', datos: { tema: primero.id } }
+      };
+    },
+
+    /* --- 5. Precisión baja en razonamiento clínico --- */
+    function () {
+      var d = Estado.datos();
+      if (d.sesiones.length < 3) return null;
+      var acc = 0, tot = 0;
+      d.sesiones.slice(0, 8).forEach(function (s) { acc += s.aciertos || 0; tot += s.total || 0; });
+      if (tot < 10) return null;
+      var pct = Math.round((acc / tot) * 100);
+      if (pct >= 65) return null;
+      return {
+        id: 'precision',
+        prioridad: 70,
+        tono: 'alerta',
+        titulo: 'Precisión del ' + pct + '% en tus últimas sesiones',
+        texto: 'Fallar no es el problema; fallar sin volver sí lo es. Prueba una sesión en modo examen: sin explicación previa, solo preguntas con corrección razonada. Es incómodo y es exactamente lo que consolida.',
+        accion: { etiqueta: 'Modo examen', accion: 'abrir-preparar' }
+      };
+    },
+
+    /* --- 6. Tema consolidado que empieza a decaer --- */
+    function () {
+      var candidato = null, peorDias = 0;
+      TUTOR.TEMAS.forEach(function (t) {
+        var e = Estado.tema(t.id);
+        if (!e.ultimo || e.vistas < 1) return;
+        var dias = Estado.diasEntre(e.ultimo, Estado.hoyISO());
+        if (dias >= 7 && dias > peorDias) { peorDias = dias; candidato = t; }
+      });
+      if (!candidato) return null;
+      return {
+        id: 'decaimiento',
+        prioridad: 55,
+        tono: 'info',
+        titulo: 'Hace ' + peorDias + ' días que no tocas «' + candidato.nombre + '»',
+        texto: 'La curva de olvido es más pronunciada justo después de aprender algo. Un repaso corto ahora cuesta cinco minutos; reconstruirlo desde cero dentro de un mes costará la sesión entera.',
+        accion: { etiqueta: 'Repaso rápido', accion: 'estudiar-tema', datos: { tema: candidato.id } }
+      };
+    },
+
+    /* --- 7. Plan más ambicioso que la realidad --- */
+    function () {
+      var plan = Estado.plan();
+      var claves = Object.keys(plan).sort();
+      if (claves.length < 4) return null;
+      var hoy = Estado.hoyISO();
+      var pasados = claves.filter(function (f) { return f < hoy; });
+      if (pasados.length < 3) return null;
+      var total = 0, hechos = 0;
+      pasados.forEach(function (f) {
+        plan[f].forEach(function (b) { total++; if (b.hecho) hechos++; });
+      });
+      if (total === 0) return null;
+      var cumplimiento = hechos / total;
+      if (cumplimiento > 0.45) return null;
+      return {
+        id: 'sobrecarga',
+        prioridad: 75,
+        tono: 'alerta',
+        titulo: 'Estás cumpliendo el ' + Math.round(cumplimiento * 100) + '% de tu plan',
+        texto: 'Eso casi nunca significa falta de voluntad: significa que el plan no cabe en tu semana. Baja los minutos diarios a lo que de verdad puedes sostener con guardias y familia. Un plan que se cumple al 90 % rinde más que uno ambicioso que se abandona.',
+        accion: { etiqueta: 'Ajustar disponibilidad', accion: 'navegar', datos: { ruta: 'ajustes' } }
+      };
+    },
+
+    /* --- 8. Todo al día --- */
+    function () {
+      var s = Estado.estadisticasTarjetas();
+      var minHoy = Estado.minutosDe(Estado.hoyISO());
+      if (s.vencenHoy > 0 || minHoy === 0) return null;
+      var global = Estado.dominioGlobal();
+      return {
+        id: 'al-dia',
+        prioridad: 20,
+        tono: 'ok',
+        titulo: 'Vas al día',
+        texto: global < 50
+          ? 'Tarjetas al día y sesión hecha. Si te queda tiempo y energía, un tema nuevo rinde más ahora que mañana con prisa.'
+          : 'Tarjetas al día, sesión hecha y dominio del ' + global + '%. Este es el momento de profundizar en un tema que ya domines: la profundización sobre base sólida es lo que separa aprobar de razonar.',
+        accion: { etiqueta: 'Elegir tema', accion: 'abrir-preparar' }
+      };
+    },
+
+    /* --- 9. Primer arranque --- */
+    function () {
+      var d = Estado.datos();
+      if (d.sesiones.length > 0) return null;
+      var s = Estado.sugerencia();
+      var t = TUTOR.tema(s.tema);
+      return {
+        id: 'primera',
+        prioridad: 100,
+        tono: 'info',
+        titulo: 'Empecemos por lo que más rinde',
+        texto: 'No hace falta que decidas nada todavía. «' + t.nombre + '» es alto rendimiento y sostiene buena parte de lo que viene después. Veinte minutos bastan para una sesión completa: se dosifica sola.',
+        accion: { etiqueta: 'Sesión de 20 min', accion: 'arranque-rapido', datos: { min: 20 } }
+      };
+    }
+  ];
+
+  function consejos() {
+    var salida = [];
+    REGLAS.forEach(function (r) {
+      try {
+        var c = r();
+        if (c) salida.push(c);
+      } catch (e) { /* una regla defectuosa no debe romper el panel */ }
+    });
+    salida.sort(function (a, b) { return b.prioridad - a.prioridad; });
+    return salida;
+  }
+
+  function principal() {
+    var c = consejos();
+    return c.length ? c[0] : null;
+  }
+
+  /* ------------------------------------------------------------
+     Voz de Minerva dentro de la sesión: una línea por fase que
+     explica POR QUÉ se hace lo que se está haciendo.
+     ------------------------------------------------------------ */
+  var VOZ_FASE = {
+    anclaje: 'Vas a fallar esto y está bien. Intentar recuperar algo que aún no sabes prepara al cerebro para codificarlo: el error previo hace que la explicación se fije mejor que si la leyeras directamente.',
+    comprension: 'Lee buscando la cadena causal, no los datos sueltos. Si una flecha no tiene un porqué, ahí tienes tu primera brecha.',
+    feynman: 'Esta es la fase que más incomoda y la que más te va a servir. La fluidez al leer engaña; solo producir la explicación revela lo que falta.',
+    recuperacion: 'Responde antes de revelar, aunque sea a medias. Y sé honesto al calificarte: si te sobrevaloras, el sistema te devolverá esta pregunta demasiado tarde.',
+    caso: 'Pregúntate siempre lo mismo: ¿qué variable cambió primero? El resto del cuadro son consecuencias y compensaciones de esa primera.',
+    consolidacion: 'Cierra bien: el error frecuente y la perla son lo que sobrevive a los meses. Las tarjetas ya quedan programadas para devolvértelo justo antes de que lo olvides.'
+  };
+
+  function vozFase(idFase) { return VOZ_FASE[idFase] || ''; }
+
+  /* ------------------------------------------------------------
+     Panel flotante
+     ------------------------------------------------------------ */
+  function pintarBoton() {
+    var contenedor = UI.$('#minerva');
+    if (!contenedor) return;
+    if (!Estado.ajustes().asistente) { contenedor.innerHTML = ''; return; }
+
+    var c = principal();
+    var alerta = c && (c.tono === 'alerta');
+    contenedor.innerHTML =
+      '<button class="minerva-btn' + (alerta ? ' con-aviso' : '') + '" data-accion="abrir-minerva" ' +
+      'aria-label="Abrir a Minerva, tu asistente">' + avatar(34) +
+      (alerta ? '<span class="punto"></span>' : '') + '</button>';
+  }
+
+  function abrir() {
+    var lista = consejos();
+    var html =
+      '<div class="minerva-cab">' + avatar(52) +
+      '<div><h3 style="margin:0">Minerva</h3>' +
+      '<div class="sm tenue">Tu asistente de estudio</div></div>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="cerrar-modal" style="margin-left:auto">✕</button>' +
+      '</div>' +
+      '<p class="minerva-saludo">' + UI.esc(saludo()) + '</p>';
+
+    if (!lista.length) {
+      html += '<div class="vacio"><span class="emoji">🌙</span>Nada urgente ahora mismo.</div>';
+    } else {
+      html += lista.slice(0, 4).map(function (c) {
+        return '<div class="minerva-consejo tono-' + c.tono + '">' +
+          '<div class="titulo">' + UI.esc(c.titulo) + '</div>' +
+          '<p>' + UI.esc(c.texto) + '</p>' +
+          (c.accion
+            ? '<button class="btn btn-s btn-primario" data-accion="minerva-accion" ' +
+              'data-real="' + c.accion.accion + '" ' +
+              'data-carga="' + UI.esc(JSON.stringify(c.accion.datos || {})) + '">' +
+              UI.esc(c.accion.etiqueta) + ' →</button>'
+            : '') +
+          '</div>';
+      }).join('');
+    }
+
+    html += '<div class="minerva-pie">' +
+      '<span class="sm tenue">«El búho de Minerva levanta el vuelo al anochecer.» ' +
+      'Un buen momento para estudiar es el que existe de verdad.</span></div>';
+
+    UI.modal(html);
+  }
+
+  return {
+    avatar: avatar,
+    consejos: consejos,
+    principal: principal,
+    vozFase: vozFase,
+    pintarBoton: pintarBoton,
+    abrir: abrir,
+    saludo: saludo
+  };
+})();
+
+
+/* ============================================================
    VISTAS — Inicio, Temario, Plan, Rendimiento, Prompt, Ajustes
    ============================================================ */
 
@@ -744,6 +1179,22 @@ UI.registrar('inicio', {
 
     var html = '';
 
+    /* --- consejo principal de Minerva --- */
+    var consejo = (Estado.ajustes().asistente && typeof Minerva !== 'undefined') ? Minerva.principal() : null;
+    if (consejo) {
+      html += '<div class="minerva-linea">' + Minerva.avatar(38) +
+        '<div class="crece"><div class="nombre">Minerva</div>' +
+        '<p><b>' + UI.esc(consejo.titulo) + '.</b> ' + UI.esc(consejo.texto) + '</p>' +
+        (consejo.accion
+          ? '<div class="linea mt"><button class="btn btn-s btn-primario" data-accion="minerva-accion" ' +
+            'data-real="' + consejo.accion.accion + '" ' +
+            'data-carga="' + UI.esc(JSON.stringify(consejo.accion.datos || {})) + '">' +
+            UI.esc(consejo.accion.etiqueta) + ' →</button>' +
+            '<button class="btn btn-s btn-fantasma" data-accion="abrir-minerva">Ver todo</button></div>'
+          : '') +
+        '</div></div>';
+    }
+
     /* --- métricas superiores --- */
     html += '<div class="rejilla c4">' +
       tarjetaMetrica('Estudio de hoy', minHoy + '<span class="tenue" style="font-size:1rem"> / ' + objetivo + ' min</span>',
@@ -775,13 +1226,19 @@ UI.registrar('inicio', {
     /* --- dos columnas --- */
     html += '<div class="rejilla c2 mt">';
 
-    /* progreso por módulo */
-    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Avance por módulo</h3>' +
-      '<div class="der"><button class="btn btn-s btn-fantasma" data-accion="ver-temario">Ver temario</button></div></div>';
-    TUTOR.MODULOS.forEach(function (m) {
-      var v = Estado.dominioModulo(m.id);
-      html += '<div class="fila"><div style="font-size:1.2rem">' + m.icono + '</div>' +
-        '<div class="crece"><div class="titulo">' + UI.esc(m.nombre) + '</div>' +
+    /* progreso por área del conocimiento */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Avance por área</h3>' +
+      '<div class="der"><button class="btn btn-s btn-fantasma" data-accion="navegar" data-ruta="areas">Áreas</button>' +
+      '<button class="btn btn-s btn-fantasma" data-accion="ver-temario">Temario</button></div></div>';
+    TUTOR.AREAS.forEach(function (a) {
+      var activa = Estado.areaActiva(a.id);
+      var v = Estado.dominioArea(a.id);
+      var nTemas = TUTOR.temasDeArea(a.id).length;
+      html += '<div class="fila"' + (activa ? '' : ' style="opacity:.45"') + '>' +
+        '<div style="font-size:1.2rem">' + a.icono + '</div>' +
+        '<div class="crece"><div class="titulo">' + UI.esc(a.nombre) +
+        (activa ? '' : ' <span class="etiq">pausada</span>') + '</div>' +
+        '<div class="sub">' + nTemas + ' temas</div>' +
         UI.barra(v, v >= 70 ? 'ok' : v >= 40 ? 'alerta' : 'acento') + '</div>' +
         '<div class="sm tenue">' + v + '%</div></div>';
     });
@@ -852,23 +1309,37 @@ function descripcionTiempo(m) {
    ------------------------------------------------------------ */
 UI.registrar('temario', {
   titulo: 'Temario',
-  sub: 'Fisiología y fisiopatología cardiovascular · ' + TUTOR.TEMAS.length + ' temas',
+  sub: function () {
+    return TUTOR.AREAS.length + ' áreas · ' + TUTOR.TEMAS.length + ' temas · ' +
+      TUTOR.todasLasTarjetas().length + ' tarjetas';
+  },
   acciones: function () {
-    return '<button class="btn btn-s" data-accion="generar-plan">Regenerar plan</button>';
+    return '<button class="btn btn-s btn-fantasma" data-accion="navegar" data-ruta="areas">Elegir áreas</button>' +
+      '<button class="btn btn-s" data-accion="generar-plan">Regenerar plan</button>';
   },
   render: function () {
     var html = '';
-    TUTOR.MODULOS.forEach(function (m) {
-      var temas = TUTOR.temasDe(m.id);
-      if (!temas.length) return;
-      var v = Estado.dominioModulo(m.id);
-      html += '<div class="tarjeta"><div class="tarjeta-cab">' +
-        '<div style="font-size:1.4rem">' + m.icono + '</div>' +
-        '<div><h2>' + UI.esc(m.nombre) + '</h2>' +
-        '<div class="sm tenue">' + UI.esc(m.resumen) + '</div></div>' +
-        '<div class="der">' + UI.etiquetaDominio(v) + '</div></div>';
+    TUTOR.AREAS.forEach(function (area) {
+      var modulos = TUTOR.modulosDe(area.id);
+      if (!modulos.length) return;
+      var activa = Estado.areaActiva(area.id);
 
-      temas.forEach(function (t) {
+      html += '<div class="linea entre mt" style="margin-bottom:8px">' +
+        '<h2 style="margin:0">' + area.icono + ' ' + UI.esc(area.nombre) +
+        (activa ? '' : ' <span class="etiq">pausada</span>') + '</h2>' +
+        UI.etiquetaDominio(Estado.dominioArea(area.id)) + '</div>';
+
+      modulos.forEach(function (m) {
+        var temas = TUTOR.temasDe(m.id);
+        if (!temas.length) return;
+        var v = Estado.dominioModulo(m.id);
+        html += '<div class="tarjeta"' + (activa ? '' : ' style="opacity:.55"') + '><div class="tarjeta-cab">' +
+          '<div style="font-size:1.4rem">' + m.icono + '</div>' +
+          '<div><h3>' + UI.esc(m.nombre) + '</h3>' +
+          '<div class="sm tenue">' + UI.esc(m.resumen) + '</div></div>' +
+          '<div class="der">' + UI.etiquetaDominio(v) + '</div></div>';
+
+        temas.forEach(function (t) {
         var d = Estado.dominio(t.id);
         var est = Estado.tema(t.id);
         html += '<div class="fila">' +
@@ -882,12 +1353,65 @@ UI.registrar('temario', {
           '</div>' +
           UI.barra(d, d >= 70 ? 'ok' : d >= 40 ? 'alerta' : 'acento') +
           '</div>' +
-          '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
-          '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
-          '</div>';
+            '<button class="btn btn-s btn-fantasma" data-accion="ver-tema" data-tema="' + t.id + '">Ficha</button>' +
+            '<button class="btn btn-s btn-primario" data-accion="estudiar-tema" data-tema="' + t.id + '">Estudiar</button>' +
+            '</div>';
+        });
+        html += '</div>';
       });
-      html += '</div>';
     });
+    return html;
+  }
+});
+
+/* ------------------------------------------------------------
+   ÁREAS DEL CONOCIMIENTO
+   ------------------------------------------------------------ */
+UI.registrar('areas', {
+  titulo: 'Áreas del conocimiento',
+  sub: 'Activa solo lo que toca ahora: el plan y las tarjetas se ajustan solos',
+  render: function () {
+    var html = '<div class="aviso"><b>Cómo usar esto.</b> Con todas las áreas activas, el plan las intercala, ' +
+      'porque alternar materias distintas retiene mejor que agotar una antes de empezar la siguiente. ' +
+      'Cuando se acerque un examen concreto, desactiva el resto: el plan, las sugerencias y el mazo de tarjetas ' +
+      'se concentrarán solo en lo que necesitas.</div>';
+
+    html += '<div class="rejilla c2 mt">';
+    TUTOR.AREAS.forEach(function (a) {
+      var activa = Estado.areaActiva(a.id);
+      var temas = TUTOR.temasDeArea(a.id);
+      var tarjetas = temas.reduce(function (n, t) { return n + (t.tarjetas || []).length; }, 0);
+      var alto = temas.filter(function (t) { return t.alto; }).length;
+      var v = Estado.dominioArea(a.id);
+
+      html += '<div class="area-tarjeta ' + (activa ? 'activa' : 'inactiva') + '">' +
+        '<div class="cab"><span class="icono">' + a.icono + '</span>' +
+        '<div class="crece"><h3>' + UI.esc(a.nombre) + '</h3>' +
+        '<div class="sm tenue">' + temas.length + ' temas · ' + alto + ' de alto rendimiento · ' + tarjetas + ' tarjetas</div></div>' +
+        '</div>' +
+        '<div class="sm tenue">' + UI.esc(a.resumen) + '</div>' +
+        '<div class="lema">' + UI.esc(a.lema) + '</div>' +
+        UI.barra(v, v >= 70 ? 'ok' : v >= 40 ? 'alerta' : 'acento') +
+        '<div class="linea entre">' +
+        '<span class="sm tenue">Dominio ' + v + '%</span>' +
+        '<div class="linea">' +
+        '<button class="btn btn-s btn-fantasma" data-accion="navegar" data-ruta="temario">Ver temas</button>' +
+        '<button class="btn btn-s ' + (activa ? '' : 'btn-primario') + '" data-accion="alternar-area" data-area="' + a.id + '">' +
+        (activa ? 'Pausar' : 'Activar') + '</button>' +
+        '</div></div></div>';
+    });
+    html += '</div>';
+
+    var activas = Estado.areasActivas().length;
+    html += '<div class="tarjeta mt"><div class="tarjeta-cab"><h3>Efecto en tu plan</h3></div>' +
+      '<div class="rejilla c3">' +
+      tarjetaMetrica('Áreas activas', activas + ' / ' + TUTOR.AREAS.length, '') +
+      tarjetaMetrica('Temas en juego', Estado.temasActivos().length, '') +
+      tarjetaMetrica('Tarjetas en el mazo', Estado.estadisticasTarjetas().total, '') +
+      '</div>' +
+      '<div class="linea mt"><button class="btn btn-primario" data-accion="generar-plan">Regenerar plan con estas áreas</button></div>' +
+      '</div>';
+
     return html;
   }
 });
@@ -901,7 +1425,9 @@ UI.registrar('tema', {
     var t = TUTOR.tema(p.tema);
     if (!t) return '';
     var m = TUTOR.modulo(t.modulo);
-    return UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
+    var a = TUTOR.area(m.area);
+    return (a ? a.icono + ' ' + UI.esc(a.nombre) + ' · ' : '') +
+      UI.esc(m.nombre) + ' · ' + UI.etiquetaDominio(Estado.dominio(t.id));
   },
   acciones: function (p) {
     return '<button class="btn btn-s" data-accion="repasar-tarjetas-tema" data-tema="' + p.tema + '">Tarjetas</button>' +
@@ -1066,7 +1592,7 @@ UI.registrar('rendimiento', {
     html += '</div></div>';
 
     /* tabla de temas ordenada por prioridad de repaso */
-    var orden = TUTOR.TEMAS.slice().sort(function (a, b) {
+    var orden = Estado.temasActivos().sort(function (a, b) {
       return Estado.dominio(a.id) - Estado.dominio(b.id);
     });
 
@@ -1118,8 +1644,13 @@ UI.registrar('prompt', {
   sub: 'Genera la instrucción exacta para NotebookLM, Claude o ChatGPT',
   angosto: true,
   render: function () {
-    var temas = TUTOR.TEMAS.map(function (t) {
-      return '<option value="' + t.id + '">' + UI.esc(t.nombre) + '</option>';
+    var temas = TUTOR.AREAS.map(function (a) {
+      var lista = TUTOR.temasDeArea(a.id);
+      if (!lista.length) return '';
+      return '<optgroup label="' + a.icono + ' ' + UI.esc(a.nombre) + '">' +
+        lista.map(function (t) {
+          return '<option value="' + t.id + '">' + (t.alto ? '🔥 ' : '') + UI.esc(t.nombre) + '</option>';
+        }).join('') + '</optgroup>';
     }).join('');
     var modos = TUTOR.MODOS.map(function (m) {
       return '<option value="' + m.id + '">' + m.icono + ' ' + UI.esc(m.nombre) + '</option>';
@@ -1174,6 +1705,21 @@ UI.registrar('ajustes', {
       '</div>' +
       '<span class="sm tenue">En automático sigue la preferencia de tu sistema o del sitio donde esté incrustada la app.</span>' +
       '</label></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab">' +
+      (typeof Minerva !== 'undefined' ? Minerva.avatar(30) : '') +
+      '<h3>Minerva</h3></div>' +
+      '<p class="sm tenue">Lee tu progreso real —racha, tarjetas vencidas, brechas repetidas, cumplimiento del plan— ' +
+      'y propone una sola acción concreta cada vez. Si prefieres estudiar sin sugerencias, puedes desactivarla.</p>' +
+      '<div class="conmutador" style="display:inline-flex">' +
+      '<button data-accion="alternar-asistente" data-valor="1" class="' + (a.asistente ? 'sel' : '') + '">Activada</button>' +
+      '<button data-accion="alternar-asistente" data-valor="0" class="' + (!a.asistente ? 'sel' : '') + '">Desactivada</button>' +
+      '</div></div>';
+
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Áreas del conocimiento</h3>' +
+      '<div class="der"><span class="etiq etiq-info">' + Estado.areasActivas().length + ' activas</span></div></div>' +
+      '<p class="sm tenue">Activa o pausa áreas completas para concentrar el plan y el mazo de tarjetas en lo que toca ahora.</p>' +
+      '<button class="btn" data-accion="navegar" data-ruta="areas">Gestionar áreas</button></div>';
 
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Minutos disponibles por día</h3>' +
       '<div class="der sm tenue">Base del plan</div></div>' +
@@ -1361,7 +1907,11 @@ var Sesion = (function () {
       '<button class="btn btn-s btn-fantasma" data-accion="abandonar-sesion">Salir</button>' +
       '</div>' +
       '<div class="aviso"><b>' + UI.esc(def.lema) + '</b><br>' +
-      '<span class="sm">' + UI.esc(def.principio) + '</span></div>';
+      '<span class="sm">' + UI.esc(def.principio) + '</span></div>' +
+      (Estado.ajustes().asistente && typeof Minerva !== 'undefined'
+        ? '<div class="minerva-linea">' + Minerva.avatar(32) +
+          '<div><div class="nombre">Minerva</div><p>' + UI.esc(Minerva.vozFase(fase.id)) + '</p></div></div>'
+        : '');
   }
 
   function pie(textoBoton) {
@@ -1665,10 +2215,10 @@ UI.registrar('preparar', {
 
     var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>1 · ¿Qué tema?</h3></div>' +
       '<select id="s-tema">' +
-      TUTOR.MODULOS.map(function (m) {
-        var temas = TUTOR.temasDe(m.id);
+      TUTOR.AREAS.map(function (area) {
+        var temas = TUTOR.temasDeArea(area.id);
         if (!temas.length) return '';
-        return '<optgroup label="' + UI.esc(m.nombre) + '">' +
+        return '<optgroup label="' + area.icono + ' ' + UI.esc(area.nombre) + '">' +
           temas.map(function (x) {
             return '<option value="' + x.id + '"' + (x.id === temaSel ? ' selected' : '') + '>' +
               (x.alto ? '🔥 ' : '') + UI.esc(x.nombre) + ' · ' + Estado.dominio(x.id) + '%</option>';
@@ -1876,6 +2426,7 @@ var NAVEGACION = [
   { ruta: 'tarjetas', icono: '🔁', nombre: 'Tarjetas', movil: true, globo: 'tarjetas' },
   { grupo: 'Organización' },
   { ruta: 'plan', icono: '🗓️', nombre: 'Plan', movil: true },
+  { ruta: 'areas', icono: '🧭', nombre: 'Áreas' },
   { ruta: 'temario', icono: '📚', nombre: 'Temario' },
   { ruta: 'rendimiento', icono: '📊', nombre: 'Rendimiento', movil: true },
   { grupo: 'Herramientas' },
@@ -1910,15 +2461,19 @@ function construirPrompt(idTema, idModo, minutos) {
   var dom = Estado.dominio(idTema);
   var brechas = Estado.brechasAbiertas().filter(function (b) { return b.tema === idTema; });
 
+  var area = TUTOR.area(TUTOR.areaDeTema(idTema)) || { nombre: 'Medicina' };
+  var modulo = TUTOR.modulo(t.modulo) || { nombre: '' };
+
   var L = [];
-  L.push('# TUTOR DE FISIOLOGÍA Y FISIOPATOLOGÍA CARDIOVASCULAR');
+  L.push('# TUTOR DE ' + area.nombre.toUpperCase() + ' — FISIOLOGÍA Y FISIOPATOLOGÍA');
   L.push('');
   L.push('## 1. ROL');
-  L.push('Actúa como tutor experto en fisiología y fisiopatología cardiovascular para estudiantes de Medicina, con nivel académico equivalente al de un docente universitario clínico.');
+  L.push('Actúa como tutor experto en ' + area.nombre.toLowerCase() + ' (fisiología y fisiopatología) para estudiantes de Medicina, con nivel académico equivalente al de un docente universitario clínico.');
   L.push('Tu objetivo no es entregarme información, sino ayudarme a comprender, integrar, razonar y recordar.');
   L.push('Tengo bases sólidas de anatomía, fisiología general y bioquímica. No expliques lo elemental salvo que detectes una brecha conceptual que impida comprender el tema.');
   L.push('');
   L.push('## 2. CONTEXTO DE ESTA SESIÓN');
+  L.push('- Área: ' + area.nombre + (modulo.nombre ? ' → ' + modulo.nombre : ''));
   L.push('- Tema: ' + t.nombre + (t.alto ? '  [ALTO RENDIMIENTO]' : ''));
   L.push('- Tiempo disponible: ' + minutos + ' minutos');
   L.push('- Modo solicitado: ' + m.nombre + ' — ' + m.descripcion);
@@ -1975,7 +2530,14 @@ function construirPrompt(idTema, idModo, minutos) {
   L.push('Prioriza «¿qué ocurriría si…?», «¿cuál es el mecanismo que explica…?», «¿qué variable cambió primero?», «¿qué compensación esperarías?», «¿qué pasa si ese mecanismo falla?».');
   L.push('');
   L.push('## 9. FUENTES');
-  L.push('Usa conceptos compatibles con Guyton & Hall, Boron & Boulpaep, Costanzo, Harrison y Braunwald. Si hay diferencias relevantes entre fuentes, indícalas. No inventes referencias.');
+  var FUENTES = {
+    cardio: 'Guyton & Hall, Boron & Boulpaep, Costanzo, Harrison y Braunwald',
+    respiratorio: 'West (Fisiología respiratoria), Guyton & Hall, Boron & Boulpaep y Harrison',
+    renal: 'Rose & Post (Trastornos de electrolitos y ácido-base), Brenner, Guyton & Hall y Harrison',
+    neuro: 'Kandel (Principios de neurociencia), Guyton & Hall, Ropper (Adams y Victor) y Harrison',
+    farmaco: 'Goodman & Gilman, Katzung, Rang & Dale y guías de sociedades de medicina intensiva'
+  };
+  L.push('Usa conceptos compatibles con ' + (FUENTES[area.id] || FUENTES.cardio) + '. Si hay diferencias relevantes entre fuentes, indícalas. No inventes referencias.');
   L.push('');
   L.push('## 10. ARRANQUE');
   L.push('Empieza directamente por lo más importante del tema indicado. No me preguntes de nuevo el tema ni el tiempo: ya están arriba.');
@@ -2135,6 +2697,50 @@ UI.accion('tema-visual', function (d) {
   UI.refrescar();
 });
 
+/* --- áreas del conocimiento --- */
+UI.accion('alternar-area', function (d) {
+  var ok = Estado.alternarArea(d.area);
+  if (!ok) {
+    UI.brindis('Debe quedar al menos un área activa');
+    return;
+  }
+  Estado.generarPlan(14);
+  UI.refrescar();
+  UI.actualizarGlobos();
+  var a = TUTOR.area(d.area);
+  UI.brindis(a.nombre + (Estado.areaActiva(d.area) ? ' activada' : ' pausada') + ' · plan regenerado');
+});
+
+/* --- Minerva --- */
+UI.accion('abrir-minerva', function () { Minerva.abrir(); });
+
+UI.accion('minerva-accion', function (d) {
+  UI.cerrarModal();
+  var datos = {};
+  try { datos = JSON.parse(d.carga || '{}'); } catch (e) { datos = {}; }
+  var real = d.real;
+  if (real === 'ir-tarjetas') { Mazo.cargar(null); UI.ir('tarjetas'); return; }
+  if (real === 'arranque-rapido') {
+    var s = Estado.sugerencia();
+    var min = parseInt(datos.min, 10) || 20;
+    Sesion.iniciar(s.tema, min <= 10 ? 'repaso' : min <= 30 ? 'comprender' : 'intensivo', min);
+    return;
+  }
+  if (real === 'estudiar-tema') { UI.ir('preparar', { tema: datos.tema }); return; }
+  if (real === 'abrir-preparar') { UI.ir('preparar'); return; }
+  if (real === 'navegar') { UI.ir(datos.ruta || 'inicio'); return; }
+  UI.ir('inicio');
+});
+
+UI.accion('abrir-preparar', function () { UI.ir('preparar'); });
+
+UI.accion('alternar-asistente', function (d) {
+  Estado.guardarAjustes({ asistente: d.valor === '1' });
+  Minerva.pintarBoton();
+  UI.refrescar();
+  UI.brindis(d.valor === '1' ? 'Minerva activada' : 'Minerva desactivada');
+});
+
 /* --- brechas --- */
 UI.accion('cerrar-brecha', function (d) {
   Estado.resolverBrecha(parseInt(d.i, 10));
@@ -2262,7 +2868,11 @@ function arrancar() {
 
     UI.ir('inicio');
     UI.actualizarGlobos();
-    Estado.suscribir(function () { UI.actualizarGlobos(); });
+    Minerva.pintarBoton();
+    Estado.suscribir(function () {
+      UI.actualizarGlobos();
+      Minerva.pintarBoton();
+    });
   });
 }
 

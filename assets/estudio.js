@@ -150,7 +150,11 @@ var Sesion = (function () {
       '<button class="btn btn-s btn-fantasma" data-accion="abandonar-sesion">Salir</button>' +
       '</div>' +
       '<div class="aviso"><b>' + UI.esc(def.lema) + '</b><br>' +
-      '<span class="sm">' + UI.esc(def.principio) + '</span></div>';
+      '<span class="sm">' + UI.esc(def.principio) + '</span></div>' +
+      (Estado.ajustes().asistente && typeof Minerva !== 'undefined'
+        ? '<div class="minerva-linea">' + Minerva.avatar(32) +
+          '<div><div class="nombre">Minerva</div><p>' + UI.esc(Minerva.vozFase(fase.id)) + '</p></div></div>'
+        : '');
   }
 
   function pie(textoBoton) {
@@ -454,10 +458,10 @@ UI.registrar('preparar', {
 
     var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>1 · ¿Qué tema?</h3></div>' +
       '<select id="s-tema">' +
-      TUTOR.MODULOS.map(function (m) {
-        var temas = TUTOR.temasDe(m.id);
+      TUTOR.AREAS.map(function (area) {
+        var temas = TUTOR.temasDeArea(area.id);
         if (!temas.length) return '';
-        return '<optgroup label="' + UI.esc(m.nombre) + '">' +
+        return '<optgroup label="' + area.icono + ' ' + UI.esc(area.nombre) + '">' +
           temas.map(function (x) {
             return '<option value="' + x.id + '"' + (x.id === temaSel ? ' selected' : '') + '>' +
               (x.alto ? '🔥 ' : '') + UI.esc(x.nombre) + ' · ' + Estado.dominio(x.id) + '%</option>';

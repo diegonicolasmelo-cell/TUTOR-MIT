@@ -29,12 +29,17 @@ const SCRIPTS_DATOS = [
   'datos-hemodinamia.js',
   'datos-electro.js',
   'datos-regulacion.js',
-  'datos-fisiopato.js'
+  'datos-fisiopato.js',
+  'datos-respiratorio.js',
+  'datos-renal.js',
+  'datos-neuro.js',
+  'datos-farmaco.js'
 ];
 
 const SCRIPTS_APP = [
   'almacen.js',
   'ui.js',
+  'asistente.js',
   'vistas.js',
   'estudio.js',
   'tarjetas.js',
@@ -59,10 +64,10 @@ const CUERPO = `
 
   <aside class="lateral">
     <div class="marca">
-      <div class="marca-icono">🫀</div>
+      <div class="marca-icono">🦉</div>
       <div>
         <div class="marca-txt">Tutor MIT</div>
-        <div class="marca-sub">Cardiovascular</div>
+        <div class="marca-sub">Con Minerva</div>
       </div>
     </div>
     <nav id="nav-lateral"></nav>
@@ -80,13 +85,14 @@ const CUERPO = `
       <div class="barra-acciones" id="acciones-vista"></div>
     </header>
     <div class="contenido" id="contenido">
-      <div class="vacio"><span class="emoji">🫀</span>Preparando tu tutor…</div>
+      <div class="vacio"><span class="emoji">🦉</span>Preparando tu tutor…</div>
     </div>
   </main>
 
 </div>
 
 <nav class="menu-movil" id="menu-movil"></nav>
+<div id="minerva"></div>
 <div class="brindis" id="brindis"></div>
 `.trim();
 
@@ -106,7 +112,7 @@ const standalone = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Tutor MIT · Cardiovascular</title>
+<title>Tutor MIT · Minerva</title>
 <base target="_top">
 </head>
 <body>
@@ -119,7 +125,7 @@ fs.writeFileSync(path.join(DIST, 'tutor-mit.html'), standalone);
 
 /* La variante para publicar como página web se inserta dentro de
    un esqueleto ya provisto por el anfitrión: sin html/head/body. */
-const artefacto = `<title>Tutor MIT Cardiovascular</title>\n${bloquesEnLinea}\n`;
+const artefacto = `<title>Tutor MIT Minerva</title>\n${bloquesEnLinea}\n`;
 fs.writeFileSync(path.join(DIST, 'artefacto.html'), artefacto);
 
 /* ------------------------------------------------------------
@@ -182,5 +188,7 @@ console.log('  appsscript/Datos.html    ' + kb(jsDatos) + '  (temario)');
 console.log('  appsscript/App.html      ' + kb(jsApp) + '  (lógica)');
 console.log('  appsscript/Codigo.gs     backend (escrito a mano, no se regenera)');
 console.log('  appsscript/appsscript.json');
-console.log('\nTemas empaquetados: ' +
-  (jsDatos.match(/^\s{2}id: '/gm) || []).length);
+const bloqueAreas = (jsDatos.split('TUTOR.AREAS = [')[1] || '').split('\n];')[0];
+console.log('\nÁreas: ' + (bloqueAreas.match(/^\s*id: '/gm) || []).length +
+  '  ·  Temas: ' + (jsDatos.match(/^\s{2}id: '/gm) || []).length +
+  '  ·  Tarjetas: ' + (jsDatos.match(/^\s*\{ f: '/gm) || []).length);

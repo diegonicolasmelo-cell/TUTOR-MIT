@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Tutor de fisiología y fisiopatología cardiovascular con metodología MIT: comprensión por mecanismos, técnica Feynman, recuperación activa y repetición espaciada.">
-  <title>Tutor MIT · Cardiovascular</title>
+  <meta name="description" content="Tutor de fisiología y fisiopatología con metodología MIT: comprensión por mecanismos, técnica Feynman, recuperación activa y repetición espaciada, con Minerva como asistente de estudio.">
+  <title>Tutor MIT · Minerva</title>
   <base target="_top">
   <link rel="stylesheet" href="assets/estilos.css">
 </head>
@@ -15,10 +15,10 @@
   <!-- ================= Barra lateral ================= -->
   <aside class="lateral">
     <div class="marca">
-      <div class="marca-icono">🫀</div>
+      <div class="marca-icono">🦉</div>
       <div>
         <div class="marca-txt">Tutor MIT</div>
-        <div class="marca-sub">Cardiovascular</div>
+        <div class="marca-sub">Con Minerva</div>
       </div>
     </div>
     <nav id="nav-lateral"></nav>
@@ -39,7 +39,7 @@
       <div class="barra-acciones" id="acciones-vista"></div>
     </header>
     <div class="contenido" id="contenido">
-      <div class="vacio" id="cargando"><span class="emoji">🫀</span>Preparando tu tutor…</div>
+      <div class="vacio"><span class="emoji">🦉</span>Preparando tu tutor…</div>
     </div>
   </main>
 
@@ -47,6 +47,9 @@
 
 <!-- ================= Navegación móvil ================= -->
 <nav class="menu-movil" id="menu-movil"></nav>
+
+<!-- ================= Asistente ================= -->
+<div id="minerva"></div>
 
 <div class="brindis" id="brindis"></div>
 
@@ -56,10 +59,15 @@
 <script src="assets/datos-electro.js"></script>
 <script src="assets/datos-regulacion.js"></script>
 <script src="assets/datos-fisiopato.js"></script>
+<script src="assets/datos-respiratorio.js"></script>
+<script src="assets/datos-renal.js"></script>
+<script src="assets/datos-neuro.js"></script>
+<script src="assets/datos-farmaco.js"></script>
 
 <!-- Lógica -->
 <script src="assets/almacen.js"></script>
 <script src="assets/ui.js"></script>
+<script src="assets/asistente.js"></script>
 <script src="assets/vistas.js"></script>
 <script src="assets/estudio.js"></script>
 <script src="assets/tarjetas.js"></script>

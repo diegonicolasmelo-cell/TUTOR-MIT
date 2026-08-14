@@ -1,8 +1,11 @@
-# Tutor MIT — Cardiovascular
+# Tutor MIT — con Minerva 🦉
 
-App modelo (mockup funcional) de un tutor de **fisiología y fisiopatología cardiovascular**
-construido sobre el método de estudio del MIT y pensado para migrar después a
-**Google Apps Script**.
+App modelo (mockup funcional) de un tutor de **fisiología y fisiopatología** construido
+sobre el método de estudio del MIT y pensado para migrar después a **Google Apps Script**.
+
+Cubre **5 áreas del conocimiento** —cardiovascular, respiratorio, renal y medio interno,
+neurofisiología y farmacología del paciente crítico— y lleva integrada a **Minerva**, una
+asistente que lee el progreso real y propone la siguiente acción concreta.
 
 El perfil de usuario es concreto: profesional que trabaja en UCI, con familia, poco tiempo,
 bases sólidas y acceso a pacientes reales. Todo el diseño responde a esas restricciones:
@@ -15,13 +18,15 @@ programa solo.
 
 | Módulo | Función |
 |---|---|
-| **Inicio** | Panel con minutos de hoy, tarjetas pendientes, dominio global, racha, brechas detectadas y arranque en un clic según el tiempo disponible. |
+| **Minerva 🦉** | Asistente que evalúa racha, tarjetas vencidas, brechas repetidas, precisión y cumplimiento del plan, y propone **una** acción concreta. Acompaña también cada fase de la sesión explicando por qué se hace. |
+| **Inicio** | Panel con minutos de hoy, tarjetas pendientes, dominio global, racha, brechas detectadas, avance por área y arranque en un clic según el tiempo disponible. |
+| **Áreas** | Activa o pausa áreas completas: el plan, las sugerencias y el mazo de tarjetas se reajustan solos. Útil para concentrarse en un examen concreto. |
 | **Sesión guiada** | El método completo en seis fases, con cronómetro y contenido recortado automáticamente según los minutos disponibles. |
 | **Tarjetas** | Recuperación activa con repetición espaciada (SM-2 adaptado), usable desde el móvil. |
 | **Plan** | Calendario de 14 días generado a partir de los minutos reales disponibles cada día. |
-| **Temario** | 18 temas con ficha completa consultable fuera de sesión. |
+| **Temario** | 32 temas en 5 áreas y 11 módulos, con ficha completa consultable fuera de sesión. |
 | **Rendimiento** | Precisión, constancia, prioridad de repaso y registro histórico de brechas. |
-| **Prompt IA** | Genera el protocolo del tutor en texto para NotebookLM, Claude o ChatGPT, ya personalizado con el tema, el tiempo y las brechas registradas. |
+| **Prompt IA** | Genera el protocolo del tutor en texto para NotebookLM, Claude o ChatGPT, personalizado con el área, el tema, el tiempo, las brechas registradas y las fuentes de referencia propias de esa materia. |
 
 ## Las seis fases de la sesión
 
@@ -37,13 +42,22 @@ modo examen, tutor intensivo, profundización), definido en `assets/datos-nucleo
 
 ## Contenido
 
-18 temas repartidos en cuatro módulos: fundamentos hemodinámicos, electrofisiología y ECG,
-regulación y presión arterial, y fisiopatología clínica. Cada tema incluye idea central,
-bloques por nivel de prioridad, variables clave, fisiopatología, correlación clínica,
-error frecuente, perla de examen, ejercicio Feynman, 8–9 preguntas de tres niveles,
-un caso clínico socrático de 5–7 pasos y 6–9 tarjetas. En total, 136 tarjetas.
+**32 temas · 11 módulos · 5 áreas · 252 tarjetas.**
 
-Los conceptos siguen Guyton & Hall, Boron & Boulpaep, Costanzo, Harrison y Braunwald.
+| Área | Temas | Contenido |
+|---|---|---|
+| 🫀 Cardiovascular | 18 | Hemodinamia, electrofisiología y ECG, regulación y presión arterial, fisiopatología clínica |
+| 🫁 Respiratorio | 4 | Mecánica ventilatoria, V/Q e intercambio, transporte de gases, insuficiencia respiratoria y SDRA |
+| ⚗️ Renal y medio interno | 4 | Filtrado y autorregulación, sodio y agua, ácido-base sistemático, potasio |
+| 🧠 Neurofisiología | 3 | Potencial de membrana, sinapsis y unión neuromuscular, presión intracraneal y conciencia |
+| 💊 Farmacología crítica | 3 | Farmacocinética alterada, vasoactivos por receptor, sedoanalgesia |
+
+Cada tema incluye idea central, bloques por nivel de prioridad, variables clave,
+fisiopatología, correlación clínica, error frecuente, perla de examen, ejercicio Feynman,
+8–9 preguntas de tres niveles, un caso clínico socrático de 5–7 pasos y 6–9 tarjetas.
+
+Los conceptos siguen las referencias habituales de cada materia: Guyton & Hall, Boron &
+Boulpaep, Costanzo, Harrison, Braunwald, West, Rose & Post, Kandel y Goodman & Gilman.
 
 ---
 
@@ -66,14 +80,19 @@ node herramientas/construir.js
 index.html                  versión de desarrollo
 assets/
   estilos.css               hoja de estilos única, sin recursos externos
-  datos-nucleo.js           módulos, modos de sesión, fases y parámetros SM-2
+  datos-nucleo.js           áreas, módulos, modos de sesión, fases y parámetros SM-2
   datos-hemodinamia.js      \
-  datos-electro.js           |  contenido del temario
-  datos-regulacion.js        |  (un archivo por módulo)
-  datos-fisiopato.js        /
+  datos-electro.js           |
+  datos-regulacion.js        |
+  datos-fisiopato.js         |  contenido del temario
+  datos-respiratorio.js      |  (un archivo por bloque temático)
+  datos-renal.js             |
+  datos-neuro.js             |
+  datos-farmaco.js          /
   almacen.js                capa de persistencia intercambiable + reglas de negocio
   ui.js                     utilidades, enrutador y cronómetro
-  vistas.js                 inicio, temario, ficha, plan, rendimiento, prompt, ajustes
+  asistente.js              Minerva: motor de reglas y panel
+  vistas.js                 inicio, áreas, temario, ficha, plan, rendimiento, prompt, ajustes
   estudio.js                motor de la sesión guiada
   tarjetas.js               repaso espaciado
   app.js                    acciones, generador de prompt y arranque
@@ -90,13 +109,18 @@ MIGRACION.md                paso a paso para llevarlo a Apps Script
 - **Persistencia aislada en un solo módulo.** `assets/almacen.js` es el único archivo que toca
   el almacenamiento y su API ya es asíncrona, de modo que cambiar `localStorage` por
   `PropertiesService` no obliga a tocar ninguna vista.
-- **Contenido separado de la lógica.** Añadir temas es editar un archivo de datos; no hay que
-  tocar el motor de sesiones.
+- **Contenido separado de la lógica.** Añadir temas o áreas completas es editar un archivo de
+  datos; no hay que tocar el motor de sesiones. La jerarquía es área → módulo → tema.
+- **Minerva es un motor de reglas, no un texto fijo.** Cada regla inspecciona el estado y
+  devuelve como mucho un consejo con una acción; se ordenan por prioridad y se muestra la más
+  relevante. Añadir una regla nueva es añadir una función a una lista.
 - **Tema claro y oscuro** resueltos por tokens, respetando la preferencia del sistema, la del
   sitio anfitrión y la elección explícita del usuario.
 
 ## Estado
 
-Mockup funcional y probado de extremo a extremo: las seis fases, el repaso espaciado, el
-planificador, el registro de brechas y el generador de prompt funcionan sobre datos reales.
+Mockup funcional y probado de extremo a extremo en Chromium, sin errores de consola: las seis
+fases, el repaso espaciado, el planificador con intercalado entre áreas, la activación y pausa
+de áreas, el registro de brechas, Minerva y el generador de prompt funcionan sobre datos reales.
+El tema claro/oscuro resuelve correctamente en los cuatro estados posibles.
 Lo pendiente para producción está en `MIGRACION.md`.

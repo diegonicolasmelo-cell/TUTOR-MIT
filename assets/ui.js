@@ -142,6 +142,8 @@ var UI = (function () {
 
     if (r.despues) r.despues(parametros);
     marcarNavegacion();
+    /* Minerva reevalúa su consejo en cada cambio de vista. */
+    if (typeof Minerva !== 'undefined') Minerva.pintarBoton();
   }
 
   function refrescar() { pintar(); }
