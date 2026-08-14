@@ -586,6 +586,27 @@ label.campo > span { display: block; font-size: .78rem; font-weight: 650; color:
   .minerva-btn { width: 50px; height: 50px; }
 }
 
+/* ---------------- Taller de contenido ---------------- */
+
+.pasos-taller { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.paso-taller { display: flex; gap: 12px; align-items: flex-start; }
+.paso-taller .num {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--primario); color: #fff;
+  display: grid; place-items: center; font-size: .8rem; font-weight: 700;
+}
+.paso-taller b { font-size: .92rem; }
+.paso-taller p { margin: 2px 0 0; font-size: .85rem; line-height: 1.55; color: var(--texto-2); }
+
+.previa {
+  border: 1px solid var(--borde); border-radius: var(--radio-s);
+  padding: 4px 14px; background: var(--superficie-2);
+}
+.previa-idea {
+  font-size: .86rem; line-height: 1.6; color: var(--texto-2);
+  border-left: 3px solid var(--primario); padding: 8px 0 8px 12px; margin-bottom: 10px;
+}
+
 /* ---------------- Áreas del conocimiento ---------------- */
 
 .area-tarjeta {

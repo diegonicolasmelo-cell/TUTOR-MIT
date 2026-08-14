@@ -128,6 +128,8 @@ google.script.run
 - [ ] El mismo progreso aparece al abrir la URL desde el móvil.
 - [ ] Las tarjetas se califican y las vencidas cambian de fecha.
 - [ ] El plan se regenera al cambiar la disponibilidad.
+- [ ] El Taller genera el prompt, valida un JSON pegado e importa el tema.
+- [ ] El contenido propio importado sigue ahí tras cerrar y volver a abrir la app.
 - [ ] El botón de copiar el prompt funciona (algunos navegadores restringen el portapapeles
       dentro de iframes; existe un método alternativo con `execCommand` como respaldo).
 
@@ -139,7 +141,12 @@ Para añadir o corregir temas, editar el archivo de datos correspondiente en `as
 regenerar con `node herramientas/construir.js` y pegar de nuevo **solo** `Datos.html` en el
 proyecto. El resto de archivos no cambia mientras no se toque la lógica.
 
-Para **añadir un área nueva** hacen falta tres pasos: añadir la entrada en `TUTOR.AREAS`
+Esa vía sigue siendo la adecuada para contenido que quieras distribuir con la app. Para el
+contenido personal de Diego existe una alternativa mejor y sin código: el **Taller**, que crea
+áreas y temas desde la interfaz y los guarda con el progreso (ver `README.md`). Ese contenido
+viaja en la exportación y se restaura automáticamente al arrancar, también en Apps Script.
+
+Para **añadir un área nueva al código base** hacen falta tres pasos: añadir la entrada en `TUTOR.AREAS`
 (`assets/datos-nucleo.js`), añadir sus módulos en `TUTOR.MODULOS` con el campo `area`, y crear
 un archivo `datos-<area>.js` con los temas, registrándolo en `SCRIPTS_DATOS` dentro de
 `herramientas/construir.js` y en los `<script>` de `index.html`. La interfaz, el planificador,

@@ -199,7 +199,9 @@ UI.registrar('temario', {
         html += '<div class="fila">' +
           '<div class="crece">' +
           '<div class="titulo">' + UI.esc(t.nombre) +
-          (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') + '</div>' +
+          (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') +
+          (t.propio && !t.verificado ? ' <span class="etiq etiq-alerta">sin verificar</span>' : '') +
+          (t.propio && t.verificado ? ' <span class="etiq etiq-ok">propio</span>' : '') + '</div>' +
           '<div class="sub">' + t.minutos + ' min · ' +
           (t.preguntas ? t.preguntas.length + ' preguntas · ' : '') +
           (t.tarjetas ? t.tarjetas.length + ' tarjetas' : '') +
@@ -292,6 +294,18 @@ UI.registrar('tema', {
     var t = TUTOR.tema(p.tema);
     if (!t) return '<div class="vacio">Tema no encontrado.</div>';
     var html = '';
+
+    if (t.propio) {
+      html += t.verificado
+        ? '<div class="aviso aviso-ok"><b>Contenido propio, verificado por ti.</b>' +
+          (t.fuentes ? ' Fuentes declaradas: ' + UI.esc(t.fuentes) : '') + '</div>'
+        : '<div class="aviso aviso-alerta"><b>Contenido propio sin verificar.</b> ' +
+          'Se generó a partir de tus fuentes y la app comprobó su estructura, no su exactitud. ' +
+          'Revísalo y márcalo como verificado cuando lo hayas contrastado.' +
+          (t.fuentes ? '<br><span class="sm">Fuentes declaradas: ' + UI.esc(t.fuentes) + '</span>' : '') +
+          '<div class="linea mt"><button class="btn btn-s" data-accion="taller-verificar" data-tema="' + t.id + '">Marcar verificado</button></div>' +
+          '</div>';
+    }
 
     html += '<div class="aviso aviso-acento"><b>Idea central.</b> ' + t.ideaCentral + '</div>';
 

@@ -16,6 +16,7 @@ var NAVEGACION = [
   { ruta: 'temario', icono: '📚', nombre: 'Temario' },
   { ruta: 'rendimiento', icono: '📊', nombre: 'Rendimiento', movil: true },
   { grupo: 'Herramientas' },
+  { ruta: 'taller', icono: '🛠️', nombre: 'Taller' },
   { ruta: 'prompt', icono: '🤖', nombre: 'Prompt IA' },
   { ruta: 'ajustes', icono: '⚙️', nombre: 'Ajustes' }
 ];
@@ -313,6 +314,7 @@ UI.accion('minerva-accion', function (d) {
     return;
   }
   if (real === 'estudiar-tema') { UI.ir('preparar', { tema: datos.tema }); return; }
+  if (real === 'ver-tema') { UI.ir('tema', { tema: datos.tema }); return; }
   if (real === 'abrir-preparar') { UI.ir('preparar'); return; }
   if (real === 'navegar') { UI.ir(datos.ruta || 'inicio'); return; }
   UI.ir('inicio');
@@ -371,6 +373,146 @@ function copiarTexto(texto) {
   try { document.execCommand('copy'); } catch (e) { }
   ta.remove();
 }
+
+/* --- taller de contenido --- */
+UI.accion('taller-generar', function () {
+  var destino = UI.$('#t-destino').value;
+  var cfg = {
+    destino: destino,
+    areaId: UI.$('#t-area').value,
+    areaNombre: (UI.$('#t-area-nombre').value || '').trim(),
+    icono: (UI.$('#t-icono').value || '').trim(),
+    moduloNombre: (UI.$('#t-modulo').value || '').trim(),
+    temaNombre: (UI.$('#t-tema').value || '').trim(),
+    minutos: parseInt(UI.$('#t-minutos').value, 10) || 20,
+    fuentes: (UI.$('#t-fuentes').value || '').trim()
+  };
+
+  if (!cfg.temaNombre) { UI.brindis('Escribe el nombre del tema'); return; }
+  if (!cfg.moduloNombre) { UI.brindis('Escribe el módulo al que pertenece'); return; }
+  if (destino === 'nueva' && !cfg.areaNombre) { UI.brindis('Escribe el nombre del área nueva'); return; }
+
+  TallerEstado.cfg = cfg;
+  TallerEstado.prompt = Taller.construirPrompt(cfg);
+  UI.refrescar();
+  UI.brindis('Prompt generado · cópialo y pégalo en NotebookLM');
+  var caja = UI.$('#t-prompt');
+  if (caja) caja.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+UI.accion('taller-copiar', function () {
+  copiarTexto(TallerEstado.prompt);
+  UI.brindis('Prompt copiado');
+});
+
+UI.accion('taller-limpiar', function () {
+  UI.$('#t-json').value = '';
+  UI.$('#t-resultado').innerHTML = '';
+  TallerEstado.validacion = null;
+});
+
+UI.accion('taller-validar', function () {
+  var bruto = UI.$('#t-json').value;
+  if (!bruto.trim()) { UI.brindis('Pega primero la respuesta'); return; }
+
+  var r = Taller.validar(bruto);
+  TallerEstado.validacion = r;
+  UI.$('#t-resultado').innerHTML = pintarValidacion(r);
+  UI.$('#t-resultado').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+function pintarValidacion(r) {
+  var html = '';
+
+  if (r.errores.length) {
+    html += '<div class="aviso aviso-acento mt"><b>No se puede importar todavía.</b> ' +
+      'Corrige esto y vuelve a pedirle la respuesta al modelo, o edita el JSON a mano:' +
+      '<ul style="margin:8px 0 0;padding-left:18px">' +
+      r.errores.map(function (e) { return '<li>' + UI.esc(e) + '</li>'; }).join('') +
+      '</ul></div>';
+  }
+
+  if (r.avisos.length) {
+    html += '<div class="aviso aviso-alerta mt"><b>Avisos</b> (no impiden importar):' +
+      '<ul style="margin:8px 0 0;padding-left:18px">' +
+      r.avisos.map(function (a) { return '<li>' + UI.esc(a) + '</li>'; }).join('') +
+      '</ul></div>';
+  }
+
+  if (!r.ok) return html;
+
+  /* Vista previa */
+  var p = r.paquete;
+  html += '<div class="aviso aviso-ok mt"><b>Estructura correcta.</b> Revisa la vista previa antes de importar.</div>';
+
+  html += '<div class="previa mt">';
+  if (p.area) {
+    html += '<div class="fila"><div style="font-size:1.3rem">' + p.area.icono + '</div>' +
+      '<div class="crece"><div class="titulo">Área nueva: ' + UI.esc(p.area.nombre) + '</div>' +
+      '<div class="sub">' + UI.esc(p.area.resumen) + '</div></div></div>';
+  } else {
+    var ae = TUTOR.area(p.areaId);
+    html += '<div class="fila"><div class="crece"><div class="titulo">Se añade al área ' +
+      (ae ? ae.icono + ' ' + UI.esc(ae.nombre) : UI.esc(p.areaId)) + '</div></div></div>';
+  }
+  if (p.modulo) {
+    html += '<div class="fila"><div class="crece"><div class="titulo">Módulo nuevo: ' +
+      UI.esc(p.modulo.nombre) + '</div></div></div>';
+  }
+
+  p.temas.forEach(function (t) {
+    html += '<div class="fila"><div class="crece">' +
+      '<div class="titulo">' + UI.esc(t.nombre) + (t.alto ? ' <span class="etiq etiq-fuego">🔥</span>' : '') + '</div>' +
+      '<div class="sub">' + t.bloques.length + ' bloques · ' + t.preguntas.length + ' preguntas · ' +
+      t.caso.pasos.length + ' pasos de caso · ' + t.tarjetas.length + ' tarjetas · ' + t.minutos + ' min</div>' +
+      (t.fuentes ? '<div class="sub">Fuentes: ' + UI.esc(t.fuentes) + '</div>' : '') +
+      '</div></div>';
+    html += '<div class="previa-idea">' + UI.esc(t.ideaCentral) + '</div>';
+  });
+  html += '</div>';
+
+  html += '<div class="linea fin mt">' +
+    '<button class="btn btn-primario btn-g" data-accion="taller-importar">Importar al temario</button></div>';
+
+  return html;
+}
+
+UI.accion('taller-importar', function () {
+  var r = TallerEstado.validacion;
+  if (!r || !r.ok) { UI.brindis('Valida primero la respuesta'); return; }
+
+  Taller.importar(r.paquete);
+  var n = r.paquete.temas.length;
+  TallerEstado.validacion = null;
+  TallerEstado.prompt = '';
+  UI.ir('temario');
+  UI.brindis(n + (n === 1 ? ' tema importado' : ' temas importados') + ' · marcados sin verificar');
+});
+
+UI.accion('taller-verificar', function (d) {
+  Estado.verificarTema(d.tema);
+  UI.refrescar();
+  UI.brindis('Tema marcado como verificado');
+});
+
+UI.accion('taller-eliminar', function (d) {
+  var t = TUTOR.tema(d.tema);
+  UI.modal('<h3>Eliminar «' + UI.esc(t ? t.nombre : d.tema) + '»</h3>' +
+    '<p>Se borrarán el tema, sus tarjetas y el progreso asociado. No afecta al resto del temario.</p>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-acento" data-accion="taller-eliminar-confirmar" data-tema="' + d.tema + '">Eliminar</button></div>');
+});
+
+UI.accion('taller-eliminar-confirmar', function (d) {
+  Estado.eliminarTema(d.tema);
+  for (var i = TUTOR.TEMAS.length - 1; i >= 0; i--) {
+    if (TUTOR.TEMAS[i].id === d.tema) TUTOR.TEMAS.splice(i, 1);
+  }
+  Estado.generarPlan(14);
+  UI.cerrarModal();
+  UI.refrescar();
+  UI.brindis('Tema eliminado');
+});
 
 /* --- datos --- */
 UI.accion('exportar', function () {
@@ -447,6 +589,9 @@ UI.accion('cerrar-modal', function () { UI.cerrarModal(); });
 function arrancar() {
   Estado.iniciar().then(function () {
     UI.aplicarTema(Estado.ajustes().tema);
+    /* El contenido creado en el Taller vive en el estado guardado:
+       se reincorpora al temario antes de pintar nada. */
+    Taller.registrarGuardado();
     pintarNavegacion();
 
     // Genera un plan inicial la primera vez.

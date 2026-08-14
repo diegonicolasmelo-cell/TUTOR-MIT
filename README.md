@@ -26,6 +26,7 @@ programa solo.
 | **Plan** | Calendario de 14 días generado a partir de los minutos reales disponibles cada día. |
 | **Temario** | 32 temas en 5 áreas y 11 módulos, con ficha completa consultable fuera de sesión. |
 | **Rendimiento** | Precisión, constancia, prioridad de repaso y registro histórico de brechas. |
+| **Taller** | Crea temas y áreas nuevas **desde tus propios apuntes y papers**, sin tocar código: la app genera el prompt con el esquema, NotebookLM lo responde leyendo tus fuentes, y pegas el JSON de vuelta. Valida, sanea, previsualiza e integra. |
 | **Prompt IA** | Genera el protocolo del tutor en texto para NotebookLM, Claude o ChatGPT, personalizado con el área, el tema, el tiempo, las brechas registradas y las fuentes de referencia propias de esa materia. |
 
 ## Las seis fases de la sesión
@@ -58,6 +59,34 @@ fisiopatología, correlación clínica, error frecuente, perla de examen, ejerci
 
 Los conceptos siguen las referencias habituales de cada materia: Guyton & Hall, Boron &
 Boulpaep, Costanzo, Harrison, Braunwald, West, Rose & Post, Kandel y Goodman & Gilman.
+
+## El Taller: contenido propio sin tocar código
+
+El temario que viene de fábrica no es el límite. Desde **Taller** se añaden temas y áreas
+completas en tres pasos, todos dentro de la interfaz:
+
+1. **Defines qué crear** (área nueva o existente, módulo, tema, minutos y fuentes). La app
+   genera un prompt que incluye el **esquema JSON exacto** del temario y una regla explícita:
+   *usar exclusivamente las fuentes del cuaderno*, y escribir `NO CUBIERTO POR LAS FUENTES`
+   antes que rellenar con conocimiento general.
+2. **NotebookLM responde leyendo tus documentos**: apuntes, papers, guías de tu unidad.
+3. **Pegas el JSON de vuelta.** La app lo valida campo por campo, informa de errores concretos
+   («faltan preguntas de nivel 3», «el caso necesita al menos 3 pasos»), sanea el HTML,
+   muestra una vista previa y lo integra al temario, al plan y al mazo de tarjetas.
+
+Tres decisiones que importan:
+
+- **Todo entra marcado como «sin verificar».** Es material clínico: la app comprueba la
+  estructura, no la exactitud. El distintivo aparece en el temario y en la ficha, Minerva
+  insiste hasta que lo revisas, y solo tú puedes marcarlo como verificado.
+- **Se declara la procedencia.** Cada tema guarda de qué documento salió, para poder
+  contrastarlo después.
+- **El HTML importado se sanea en un documento inerte** (`DOMParser`), no asignando
+  `innerHTML`: de lo contrario, un `onerror` en una imagen se ejecutaría durante la propia
+  validación. Solo sobrevive el marcado que usa el temario.
+
+El contenido propio se guarda con el progreso, de modo que viaja en la exportación y aparece
+igual tras migrar a Apps Script.
 
 ---
 
@@ -92,6 +121,7 @@ assets/
   almacen.js                capa de persistencia intercambiable + reglas de negocio
   ui.js                     utilidades, enrutador y cronómetro
   asistente.js              Minerva: motor de reglas y panel
+  taller.js                 esquema, generador de prompt, validador, saneado e importador
   vistas.js                 inicio, áreas, temario, ficha, plan, rendimiento, prompt, ajustes
   estudio.js                motor de la sesión guiada
   tarjetas.js               repaso espaciado
@@ -111,6 +141,9 @@ MIGRACION.md                paso a paso para llevarlo a Apps Script
   `PropertiesService` no obliga a tocar ninguna vista.
 - **Contenido separado de la lógica.** Añadir temas o áreas completas es editar un archivo de
   datos; no hay que tocar el motor de sesiones. La jerarquía es área → módulo → tema.
+- **Un solo esquema para el Taller.** El generador de prompt y el validador salen de la misma
+  definición (`Taller.ESQUEMA` y `plantillaJson`), de modo que no pueden divergir: lo que se
+  pide es exactamente lo que se valida.
 - **Minerva es un motor de reglas, no un texto fijo.** Cada regla inspecciona el estado y
   devuelve como mucho un consejo con una acción; se ordenan por prioridad y se muestra la más
   relevante. Añadir una regla nueva es añadir una función a una lista.
@@ -121,6 +154,8 @@ MIGRACION.md                paso a paso para llevarlo a Apps Script
 
 Mockup funcional y probado de extremo a extremo en Chromium, sin errores de consola: las seis
 fases, el repaso espaciado, el planificador con intercalado entre áreas, la activación y pausa
-de áreas, el registro de brechas, Minerva y el generador de prompt funcionan sobre datos reales.
+de áreas, el registro de brechas, Minerva, el generador de prompt y el Taller completo
+—generar, validar, sanear, importar, estudiar el tema importado, sobrevivir a una recarga,
+verificar y eliminar— funcionan sobre datos reales.
 El tema claro/oscuro resuelve correctamente en los cuatro estados posibles.
 Lo pendiente para producción está en `MIGRACION.md`.

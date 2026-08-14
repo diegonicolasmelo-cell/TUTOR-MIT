@@ -25,7 +25,10 @@ var Almacen = (function () {
       sesiones: [],
       plan: {},
       brechas: [],
-      racha: { ultimoDia: null, dias: 0, mejor: 0 }
+      racha: { ultimoDia: null, dias: 0, mejor: 0 },
+      /* Contenido creado por el usuario desde el Taller. Viaja con
+         el progreso, de modo que se exporta e importa con él. */
+      contenido: { areas: [], modulos: [], temas: [] }
     };
   }
 
@@ -524,6 +527,66 @@ var Estado = (function () {
         minutos: Math.min(Estado.minutosDisponibles(hoy) || 25, 30),
         origen: 'sugerido'
       };
+    },
+
+    /* ---------- contenido propio (Taller) ---------- */
+    contenido: function () {
+      if (!d.contenido) d.contenido = { areas: [], modulos: [], temas: [] };
+      return d.contenido;
+    },
+
+    /* Guarda un paquete ya validado por el Taller. Las áreas y los
+       módulos se añaden solo si no existían: así se pueden ir
+       sumando temas a un área propia creada antes. */
+    agregarContenido: function (paquete) {
+      var c = Estado.contenido();
+      if (paquete.area && !c.areas.some(function (a) { return a.id === paquete.area.id; })) {
+        c.areas.push(paquete.area);
+      }
+      if (paquete.modulo && !c.modulos.some(function (m) { return m.id === paquete.modulo.id; })) {
+        c.modulos.push(paquete.modulo);
+      }
+      paquete.temas.forEach(function (t) {
+        var i = c.temas.findIndex(function (x) { return x.id === t.id; });
+        if (i >= 0) c.temas[i] = t; else c.temas.push(t);
+      });
+      persistir();
+      notificar();
+    },
+
+    verificarTema: function (idTema) {
+      var c = Estado.contenido();
+      c.temas.forEach(function (t) { if (t.id === idTema) t.verificado = true; });
+      var vivo = TUTOR.tema(idTema);
+      if (vivo) vivo.verificado = true;
+      persistir();
+      notificar();
+    },
+
+    eliminarTema: function (idTema) {
+      var c = Estado.contenido();
+      c.temas = c.temas.filter(function (t) { return t.id !== idTema; });
+      /* Áreas y módulos que se quedan sin temas dejan de tener sentido. */
+      c.modulos = c.modulos.filter(function (m) {
+        return c.temas.some(function (t) { return t.modulo === m.id; });
+      });
+      c.areas = c.areas.filter(function (a) {
+        return c.modulos.some(function (m) { return m.area === a.id; });
+      });
+      delete d.temas[idTema];
+      Object.keys(d.tarjetas).forEach(function (k) {
+        if (k.indexOf(idTema + '::') === 0) delete d.tarjetas[k];
+      });
+      persistir();
+      notificar();
+    },
+
+    temasPropios: function () {
+      return Estado.contenido().temas;
+    },
+
+    temasSinVerificar: function () {
+      return Estado.contenido().temas.filter(function (t) { return !t.verificado; });
     },
 
     /* ---------- utilidades expuestas ---------- */

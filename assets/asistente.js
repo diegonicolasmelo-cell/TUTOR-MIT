@@ -242,7 +242,26 @@ var Minerva = (function () {
       };
     },
 
-    /* --- 9. Primer arranque --- */
+    /* --- 9. Contenido propio pendiente de revisar --- */
+    function () {
+      if (typeof Estado.temasSinVerificar !== 'function') return null;
+      var pendientes = Estado.temasSinVerificar();
+      if (!pendientes.length) return null;
+      return {
+        id: 'sin-verificar',
+        prioridad: 90,
+        tono: 'alerta',
+        titulo: pendientes.length === 1
+          ? 'Un tema tuyo sigue sin verificar'
+          : pendientes.length + ' temas tuyos siguen sin verificar',
+        texto: 'Los importaste desde tus fuentes y la app comprobó su estructura, no su exactitud. ' +
+          'Revísalos antes de fiarte de ellos en un examen o con un paciente: una vez marcados como verificados, ' +
+          'dejo de insistir.',
+        accion: { etiqueta: 'Revisar «' + pendientes[0].nombre + '»', accion: 'ver-tema', datos: { tema: pendientes[0].id } }
+      };
+    },
+
+    /* --- 10. Primer arranque --- */
     function () {
       var d = Estado.datos();
       if (d.sesiones.length > 0) return null;

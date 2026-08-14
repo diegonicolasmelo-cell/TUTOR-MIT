@@ -41,6 +41,7 @@ const SCRIPTS_APP = [
   'ui.js',
   'asistente.js',
   'vistas.js',
+  'taller.js',
   'estudio.js',
   'tarjetas.js',
   'app.js'
