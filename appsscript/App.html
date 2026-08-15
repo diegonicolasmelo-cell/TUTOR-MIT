@@ -953,6 +953,81 @@ var Crono = (function () {
 
 
 /* ============================================================
+   PUENTE CON GOOGLE
+   ------------------------------------------------------------
+   Todo lo que la app necesita del lado servidor pasa por aquí:
+   leer un Google Doc, listar los recientes y (más adelante)
+   hablar con la API de Gemini.
+
+   Por qué existe este archivo y no está repartido por las
+   vistas: estas funciones SOLO existen dentro de Apps Script.
+   En el navegador no hay DriveApp ni UrlFetchApp, y fingir lo
+   contrario haría que la app pareciese funcionar en el mockup
+   y fallara justo donde importa. Así que el puente responde
+   siempre con la misma forma —{ ok, ... } o { ok:false, error }—
+   y cuando no está disponible lo dice con todas las letras en
+   vez de romperse.
+   ============================================================ */
+
+var Puente = (function () {
+
+  var enAppsScript = (typeof google !== 'undefined' &&
+    typeof google.script !== 'undefined' &&
+    typeof google.script.run !== 'undefined');
+
+  var MOTIVO_SIN_PUENTE =
+    'Esto necesita la versión instalada en Google Apps Script. ' +
+    'En el mockup del navegador no hay acceso a tu Drive: mira MIGRACION.md ' +
+    'para instalarla, o pega el JSON a mano en el paso 3.';
+
+  /* google.script.run usa manejadores, no promesas. Envolverlo
+     una vez evita repetir el mismo bloque en cada llamada y deja
+     que las vistas usen async/await como con el almacén. */
+  function llamar(nombre) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolver) {
+      if (!enAppsScript) {
+        resolver({ ok: false, error: MOTIVO_SIN_PUENTE, sinPuente: true });
+        return;
+      }
+      var run = google.script.run
+        .withSuccessHandler(function (r) {
+          /* El servidor devuelve siempre { ok: ... }; si algo
+             llega vacío se trata como fallo, no como éxito mudo. */
+          resolver(r || { ok: false, error: 'El servidor no devolvió nada.' });
+        })
+        .withFailureHandler(function (e) {
+          resolver({ ok: false, error: (e && e.message) ? e.message : String(e) });
+        });
+      run[nombre].apply(run, args);
+    });
+  }
+
+  return {
+    disponible: function () { return enAppsScript; },
+    motivo: MOTIVO_SIN_PUENTE,
+    llamar: llamar,
+
+    /* --- Google Docs como bandeja de entrada --- */
+    leerDoc: function (referencia) { return llamar('leerDocumento', referencia); },
+    docsRecientes: function () { return llamar('listarDocsRecientes'); },
+
+    /* --- Gemini con File Search ---
+       La clave nunca pasa por aquí de vuelta: guardarClave la
+       manda al servidor y estadoClave solo dice si está puesta.
+       Así no queda copia en el estado de la app, que es
+       exportable. */
+    guardarClave: function (clave, modelo) { return llamar('guardarClaveGemini', clave, modelo); },
+    borrarClave: function () { return llamar('borrarClaveGemini'); },
+    estadoClave: function () { return llamar('estadoGemini'); },
+    probarClave: function () { return llamar('probarGemini'); },
+    almacenes: function () { return llamar('listarAlmacenesGemini'); },
+    generar: function (prompt, almacen) { return llamar('generarConGemini', prompt, almacen); }
+  };
+})();
+
+
+/* ============================================================
    MINERVA — asistente de estudio
    ------------------------------------------------------------
    El búho de Minerva emprende su vuelo al caer el crepúsculo
@@ -1943,6 +2018,35 @@ UI.registrar('ajustes', {
       '<button data-accion="alternar-asistente" data-valor="0" class="' + (!a.asistente ? 'sel' : '') + '">Desactivada</button>' +
       '</div></div>';
 
+    /* --- Gemini con File Search --- */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Generación con mis fuentes</h3>' +
+      '<div class="der" id="a-gemini-etiq"></div></div>' +
+      '<p class="sm tenue">NotebookLM no tiene API pública, así que la app no puede pedirle nada. ' +
+      'Lo que sí puede es hacer lo mismo por su cuenta: <b>File Search</b> de la API de Gemini indexa ' +
+      'los papers que tú subes y responde anclado en ellos, con citas al documento de origen. ' +
+      'Con esto el Taller genera el módulo sin que copies ni pegues nada.</p>' +
+      '<ol class="sm tenue" style="padding-left:18px;margin:8px 0">' +
+      '<li>Crea una clave en Google AI Studio.</li>' +
+      '<li>Crea ahí un almacén de File Search y sube tus papers <b>una sola vez</b>.</li>' +
+      '<li>Pega la clave aquí y elige el almacén en el Taller.</li></ol>';
+
+    if (!Puente.disponible()) {
+      html += '<div class="aviso aviso-alerta">' + UI.esc(Puente.motivo) + '</div>';
+    } else {
+      html += '<label class="campo"><span>Clave de la API de Gemini</span>' +
+        '<input type="password" id="a-gemini-clave" placeholder="AIza…" autocomplete="off"></label>' +
+        '<label class="campo"><span>Modelo</span>' +
+        '<input type="text" id="a-gemini-modelo" placeholder="gemini-flash-latest"></label>' +
+        '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="gemini-guardar">Guardar y probar</button>' +
+        '<button class="btn btn-fantasma" data-accion="gemini-borrar">Borrar la clave</button></div>' +
+        '<div id="a-gemini-estado"></div>' +
+        '<p class="sm tenue mt">La clave se guarda en tu cuenta de Google, en el servidor, y ' +
+        '<b>no entra en el progreso exportable</b>: si algún día compartes tu copia de seguridad, ' +
+        'no viaja dentro. Consumir la API tiene coste según lo que uses.</p>';
+    }
+    html += '</div>';
+
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Áreas del conocimiento</h3>' +
       '<div class="der"><span class="etiq etiq-info">' + Estado.areasActivas().length + ' activas</span></div></div>' +
       '<p class="sm tenue">Activa o pausa áreas completas para concentrar el plan y el mazo de tarjetas en lo que toca ahora.</p>' +
@@ -2281,19 +2385,44 @@ var Taller = (function () {
     return texto;
   }
 
+  /* Google Docs sustituye las comillas rectas por tipográficas al
+     pegar, y eso basta para que JSON.parse falle entero. Como es
+     precisamente lo que ocurre al usar un Doc de bandeja, hay que
+     contemplarlo o esa vía no sirve de nada. */
+  function enderezarComillas(t) {
+    return t
+      .replace(/[“”„‟«»]/g, '"')
+      .replace(/[‘’‚‛]/g, "'");
+  }
+
   function validar(bruto) {
     var errores = [], avisos = [];
     var datos;
+    var texto = extraerJson(bruto);
 
     try {
-      datos = JSON.parse(extraerJson(bruto));
+      datos = JSON.parse(texto);
     } catch (e) {
-      return {
-        ok: false,
-        errores: ['El texto no es un JSON válido. ' + e.message +
-          '  ·  Comprueba que has pegado el objeto completo, desde la primera llave { hasta la última }.'],
-        avisos: []
-      };
+      /* Se reintenta enderezando las comillas, pero solo como
+         segundo intento: hacerlo siempre estropearía un texto que
+         legítimamente lleve comillas tipográficas dentro de un
+         valor. Si el reintento también falla, se informa del error
+         original, que es el que describe el problema de verdad. */
+      var rescatado = null;
+      try { rescatado = JSON.parse(enderezarComillas(texto)); } catch (e2) { rescatado = null; }
+
+      if (rescatado === null) {
+        return {
+          ok: false,
+          errores: ['El texto no es un JSON válido. ' + e.message +
+            '  ·  Comprueba que has pegado el objeto completo, desde la primera llave { hasta la última }.'],
+          avisos: []
+        };
+      }
+      datos = rescatado;
+      avisos.push('El documento traía comillas tipográficas («») en lugar de rectas ("). ' +
+        'Es lo que hace Google Docs al pegar; se corrigieron solas, pero revisa que ningún ' +
+        'texto haya perdido comillas que fueran intencionadas.');
     }
 
     /* Normalización: se acepta un tema suelto o una lista. */
@@ -2570,7 +2699,8 @@ var Taller = (function () {
    VISTA — Taller
    ============================================================ */
 
-var TallerEstado = { paso: 1, prompt: '', validacion: null, cfg: null };
+var TallerEstado = { paso: 1, prompt: '', validacion: null, cfg: null,
+  via: 'pegar', bruto: '', almacenes: null, almacen: '', gemini: null };
 
 UI.registrar('taller', {
   titulo: 'Taller de contenido',
@@ -2659,9 +2789,74 @@ UI.registrar('taller', {
       '</div></div>';
 
     /* --- paso 3: importar --- */
-    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>3 · Pega aquí la respuesta</h3></div>' +
-      '<p class="sm tenue">Copia el JSON completo que te devuelva y pégalo tal cual. Si viene envuelto en comillas de código o con una frase delante, la app lo recorta sola.</p>' +
-      '<textarea id="t-json" style="min-height:150px;font-family:var(--mono);font-size:.78rem" placeholder=\'{ "area": { … }, "modulo": { … }, "temas": [ … ] }\'></textarea>' +
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>3 · Trae la respuesta</h3></div>';
+
+    /* Dos vías para lo mismo. La del Doc existe porque copiar 9 KB
+       de JSON entre apps en el móvil es justo donde se rompe el
+       flujo; pegar en un Doc que ya tienes abierto, no. */
+    var via = TallerEstado.via;
+    function pestana(id, texto) {
+      return '<button class="btn btn-s' + (via === id ? ' btn-primario' : '') +
+        '" data-accion="taller-via" data-via="' + id + '">' + texto + '</button>';
+    }
+    html += '<div class="linea segmentado mt">' +
+      pestana('pegar', 'Pegar el JSON') +
+      pestana('doc', 'Desde un Google Doc') +
+      pestana('gemini', 'Generar con mis fuentes') +
+      '</div>';
+
+    if (via === 'gemini') {
+      html += '<p class="sm tenue mt">Consulta tus documentos y escribe el módulo sin que ' +
+        'copies ni pegues nada. Las fuentes se suben una sola vez a un almacén de ' +
+        '<b>File Search</b> desde Google AI Studio; aquí solo se elige cuál usar.</p>';
+
+      if (!Puente.disponible()) {
+        html += '<div class="aviso aviso-alerta mt" id="t-sin-puente">' + UI.esc(Puente.motivo) + '</div>';
+      } else if (TallerEstado.gemini && !TallerEstado.gemini.configurada) {
+        html += '<div class="aviso aviso-alerta mt">Falta la clave de Gemini. ' +
+          'Ponla en <b>Ajustes → Generación con mis fuentes</b>.</div>';
+      }
+
+      html += '<div class="linea mt"><select id="t-almacen" class="crece">' +
+        (TallerEstado.almacenes && TallerEstado.almacenes.length
+          ? TallerEstado.almacenes.map(function (a) {
+              return '<option value="' + UI.esc(a.nombre) + '"' +
+                (TallerEstado.almacen === a.nombre ? ' selected' : '') + '>' +
+                UI.esc(a.titulo) + '</option>';
+            }).join('')
+          : '<option value="">— sin almacenes cargados —</option>') +
+        '</select>' +
+        '<button class="btn btn-s btn-fantasma" data-accion="taller-almacenes">Buscar</button></div>';
+
+      html += '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="taller-generar-gemini">Generar el módulo</button>' +
+        '</div>' +
+        '<p class="sm tenue mt">Necesita el prompt del paso 2. Sin almacén el modelo respondería ' +
+        'de memoria, que es justo lo que queremos evitar, así que la app avisa si ocurre.</p>' +
+        '<div id="t-gemini"></div>';
+    }
+
+    if (via === 'doc') {
+      html += '<p class="sm tenue mt">Pega la respuesta de NotebookLM en un Documento de Google ' +
+        'y tráela desde aquí. No hace falta que borres el texto de alrededor: la app recorta el JSON sola.</p>';
+
+      if (!Puente.disponible()) {
+        html += '<div class="aviso aviso-alerta mt" id="t-sin-puente">' + UI.esc(Puente.motivo) + '</div>';
+      }
+
+      html += '<div class="linea mt">' +
+        '<input id="t-doc" class="crece" placeholder="Pega el enlace del documento…">' +
+        '<button class="btn btn-primario" data-accion="taller-traer-doc">Traer</button></div>' +
+        '<div class="linea mt"><button class="btn btn-s btn-fantasma" data-accion="taller-listar-docs">' +
+        'Ver mis documentos recientes</button></div>' +
+        '<div id="t-docs"></div>';
+    } else if (via === 'pegar') {
+      html += '<p class="sm tenue mt">Copia el JSON completo que te devuelva y pégalo tal cual. ' +
+        'Si viene envuelto en comillas de código o con una frase delante, la app lo recorta sola.</p>';
+    }
+
+    html += '<textarea id="t-json" style="min-height:150px;font-family:var(--mono);font-size:.78rem" placeholder=\'{ "area": { … }, "modulo": { … }, "temas": [ … ] }\'>' +
+      UI.esc(TallerEstado.bruto || '') + '</textarea>' +
       '<div class="linea mt"><button class="btn btn-primario" data-accion="taller-validar">Validar</button>' +
       '<button class="btn btn-fantasma" data-accion="taller-limpiar">Limpiar</button></div>' +
       '<div id="t-resultado"></div>' +
@@ -4685,6 +4880,49 @@ UI.accion('guardar-srs', function () {
   UI.brindis('Preferencias de repaso guardadas');
 });
 
+/* --- clave de Gemini --- */
+UI.accion('gemini-guardar', function () {
+  var clave = (UI.$('#a-gemini-clave') || {}).value || '';
+  var modelo = (UI.$('#a-gemini-modelo') || {}).value || '';
+  if (!clave.trim()) { UI.brindis('Pega primero la clave'); return; }
+
+  var caja = UI.$('#a-gemini-estado');
+  if (caja) caja.innerHTML = '<div class="sm tenue mt">Guardando y probando…</div>';
+
+  Puente.guardarClave(clave.trim(), modelo.trim()).then(function (r) {
+    if (!r.ok) {
+      if (caja) caja.innerHTML = '<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>';
+      return;
+    }
+    /* Guardar sin probar dejaría el fallo para el peor momento:
+       cuando esté esperando un módulo generado. */
+    return Puente.probarClave().then(function (p) {
+      var el = UI.$('#a-gemini-estado');
+      if (!el) return;
+      if (!p.ok) {
+        el.innerHTML = '<div class="aviso aviso-acento mt"><b>Guardada, pero no funciona.</b> ' +
+          UI.esc(p.error) + '</div>';
+        UI.brindis('La clave no responde');
+        return;
+      }
+      el.innerHTML = '<div class="aviso aviso-ok mt"><b>Clave verificada.</b> ' +
+        p.modelos + ' modelos disponibles.</div>';
+      var campo = UI.$('#a-gemini-clave');
+      if (campo) campo.value = '';
+      UI.brindis('Clave verificada');
+    });
+  });
+});
+
+UI.accion('gemini-borrar', function () {
+  Puente.borrarClave().then(function () {
+    TallerEstado.gemini = null;
+    var caja = UI.$('#a-gemini-estado');
+    if (caja) caja.innerHTML = '<div class="sm tenue mt">Clave borrada.</div>';
+    UI.brindis('Clave borrada');
+  });
+});
+
 UI.accion('tema-visual', function (d) {
   Estado.guardarAjustes({ tema: d.valor });
   UI.aplicarTema(d.valor);
@@ -4998,11 +5236,152 @@ UI.accion('taller-limpiar', function () {
   UI.$('#t-json').value = '';
   UI.$('#t-resultado').innerHTML = '';
   TallerEstado.validacion = null;
+  TallerEstado.bruto = '';
+});
+
+/* --- vía de entrada: portapapeles o Google Doc --- */
+UI.accion('taller-via', function (d) {
+  /* Se conserva lo ya escrito al cambiar de pestaña: perder un
+     pegado de 9 KB por tocar un botón sería inaceptable. */
+  var caja = UI.$('#t-json');
+  if (caja) TallerEstado.bruto = caja.value;
+  TallerEstado.via = d.via;
+  UI.refrescar();
+
+  /* Al entrar en la vía Gemini se consulta si hay clave, para
+     poder decirlo antes de que pulse «Generar» y falle. */
+  if (d.via === 'gemini' && Puente.disponible() && !TallerEstado.gemini) {
+    Puente.estadoClave().then(function (r) {
+      TallerEstado.gemini = r.ok ? r : { configurada: false };
+      if (UI.rutaActual() === 'taller') UI.refrescar();
+    });
+  }
+});
+
+/* --- vía Gemini + File Search --- */
+UI.accion('taller-almacenes', function () {
+  var caja = UI.$('#t-gemini');
+  if (caja) caja.innerHTML = '<div class="sm tenue mt">Buscando almacenes…</div>';
+  Puente.almacenes().then(function (r) {
+    caja = UI.$('#t-gemini');
+    if (!r.ok) {
+      if (caja) caja.innerHTML = '<div class="aviso aviso-alerta mt">' + UI.esc(r.error) + '</div>';
+      return;
+    }
+    TallerEstado.almacenes = r.almacenes;
+    if (r.almacenes.length && !TallerEstado.almacen) TallerEstado.almacen = r.almacenes[0].nombre;
+    UI.refrescar();
+    UI.brindis(r.almacenes.length
+      ? r.almacenes.length + (r.almacenes.length === 1 ? ' almacén encontrado' : ' almacenes encontrados')
+      : 'No tienes almacenes de File Search todavía. Créalo en Google AI Studio y sube ahí tus papers.');
+  });
+});
+
+UI.accion('taller-generar-gemini', function () {
+  if (!TallerEstado.prompt) {
+    UI.brindis('Genera antes el prompt en el paso 2');
+    return;
+  }
+  var sel = UI.$('#t-almacen');
+  var almacen = sel ? sel.value : '';
+  TallerEstado.almacen = almacen;
+
+  var caja = UI.$('#t-gemini');
+  if (caja) {
+    caja.innerHTML = '<div class="aviso mt">Consultando tus documentos… ' +
+      'esto tarda bastante más que una respuesta corta, porque está escribiendo un módulo entero.</div>';
+  }
+
+  Puente.generar(TallerEstado.prompt, almacen).then(function (r) {
+    caja = UI.$('#t-gemini');
+    if (!r.ok) {
+      if (caja) caja.innerHTML = '<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>';
+      UI.brindis('No se pudo generar');
+      return;
+    }
+
+    TallerEstado.bruto = r.texto;
+    var v = Taller.validar(r.texto);
+    TallerEstado.validacion = v;
+    UI.refrescar();
+
+    var cabecera = '';
+    if (!r.anclado) {
+      cabecera += '<div class="aviso aviso-acento mt"><b>Sin anclar a tus fuentes.</b> ' +
+        'No se eligió almacén, así que esto lo escribió el modelo de memoria. ' +
+        'Trátalo como un borrador, no como material de estudio.</div>';
+    } else if (!r.citas.length) {
+      cabecera += '<div class="aviso aviso-alerta mt"><b>Sin citas.</b> Se usó el almacén, ' +
+        'pero la respuesta no señala de qué documento salió cada cosa. Revísala con más cuidado.</div>';
+    } else {
+      cabecera += '<div class="aviso aviso-ok mt"><b>Anclado en tus documentos:</b> ' +
+        r.citas.map(function (c) { return UI.esc(c); }).join(' · ') + '</div>';
+    }
+
+    var res = UI.$('#t-gemini');
+    if (res) res.innerHTML = cabecera;
+    var salida = UI.$('#t-resultado');
+    if (salida) salida.innerHTML = pintarValidacion(v);
+    UI.brindis(v.ok ? 'Módulo generado · estructura correcta' : 'Módulo generado · revisa los errores');
+  });
+});
+
+UI.accion('taller-traer-doc', function () {
+  var ref = (UI.$('#t-doc') || {}).value || '';
+  if (!ref.trim()) { UI.brindis('Pega primero el enlace del documento'); return; }
+  traerDeDoc(ref.trim());
+});
+
+UI.accion('taller-doc-elegir', function (d) { traerDeDoc(d.id); });
+
+function traerDeDoc(referencia) {
+  UI.brindis('Leyendo el documento…');
+  Puente.leerDoc(referencia).then(function (r) {
+    if (!r.ok) { UI.brindis(r.error); return; }
+    if (!r.texto || !r.texto.trim()) {
+      UI.brindis('«' + r.nombre + '» está vacío.');
+      return;
+    }
+    TallerEstado.bruto = r.texto;
+    UI.refrescar();
+    /* Validar en el acto: traerlo y no decir si sirve dejaría el
+       trabajo a medias justo donde el usuario espera respuesta. */
+    var v = Taller.validar(r.texto);
+    TallerEstado.validacion = v;
+    UI.$('#t-resultado').innerHTML = pintarValidacion(v);
+    UI.brindis(v.ok
+      ? 'Traído de «' + r.nombre + '» · estructura correcta'
+      : 'Traído de «' + r.nombre + '» · revisa los errores');
+  });
+}
+
+UI.accion('taller-listar-docs', function () {
+  var caja = UI.$('#t-docs');
+  if (caja) caja.innerHTML = '<div class="sm tenue mt">Buscando…</div>';
+  Puente.docsRecientes().then(function (r) {
+    caja = UI.$('#t-docs');
+    if (!caja) return;
+    if (!r.ok) {
+      caja.innerHTML = '<div class="aviso aviso-alerta mt">' + UI.esc(r.error) + '</div>';
+      return;
+    }
+    if (!r.docs.length) {
+      caja.innerHTML = '<div class="sm tenue mt">No encontré documentos en tu Drive.</div>';
+      return;
+    }
+    caja.innerHTML = '<div class="mt">' + r.docs.map(function (doc) {
+      return '<div class="fila"><div class="crece"><div class="titulo">' + UI.esc(doc.nombre) + '</div>' +
+        '<div class="sub">' + UI.fechaCorta(doc.modificado.slice(0, 10)) + '</div></div>' +
+        '<button class="btn btn-s btn-fantasma" data-accion="taller-doc-elegir" data-id="' +
+        UI.esc(doc.id) + '">Traer</button></div>';
+    }).join('') + '</div>';
+  });
 });
 
 UI.accion('taller-validar', function () {
   var bruto = UI.$('#t-json').value;
   if (!bruto.trim()) { UI.brindis('Pega primero la respuesta'); return; }
+  TallerEstado.bruto = bruto;
 
   var r = Taller.validar(bruto);
   TallerEstado.validacion = r;

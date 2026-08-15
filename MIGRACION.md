@@ -122,6 +122,18 @@ al margen de la app.
 **`recordatorioDiario()`** — envía por correo los bloques pendientes del día. Requiere crear
 un **activador temporal diario** desde el panel de activadores del proyecto.
 
+**`leerDocumento(referencia)` y `listarDocsRecientes()`** — ya conectadas. Permiten traer la
+respuesta de NotebookLM desde un Google Doc en lugar del portapapeles, eligiendo el documento
+de una lista o pegando su enlace. Acepta también archivos `.txt` y `.json` de Drive.
+
+**`generarConGemini(prompt, almacen)` y compañía** — ya conectadas. Llaman a la API de Gemini
+con **File Search** para escribir el módulo anclado en los papers que subiste, sin copiar ni
+pegar. Requieren una clave, que se guarda en `PropertiesService` y **nunca** en el estado de
+la app: el estado es exportable desde Ajustes y una clave dentro viajaría en cualquier copia.
+
+> La creación del almacén y la **subida de documentos** se hacen en Google AI Studio, que ya
+> tiene interfaz para ello. La app solo lista los almacenes y consulta.
+
 Para usarlas desde el cliente basta con llamarlas igual que a las de almacenamiento:
 
 ```js
@@ -156,6 +168,19 @@ google.script.run
       `<base target="_top">` del `Index` no debe romperlo).
 - [ ] El botón de copiar el prompt funciona (algunos navegadores restringen el portapapeles
       dentro de iframes; existe un método alternativo con `execCommand` como respaldo).
+- [ ] `Taller → Desde un Google Doc` lista tus documentos recientes y trae uno. Es la primera
+      llamada que pide los permisos nuevos de Drive y Docs: hay que **volver a autorizar** el
+      proyecto tras añadir los ámbitos al manifiesto, o fallará con un error de permisos.
+- [ ] Pegar el JSON en un Doc real y traerlo: comprueba que el aviso de comillas tipográficas
+      aparece y que el módulo se importa igual.
+- [ ] `Ajustes → Generación con mis fuentes` guarda la clave y la prueba. Un error 403 aquí
+      casi siempre es la clave, no el código.
+- [ ] El desplegable de almacenes se llena. Si sale vacío, el almacén no está creado todavía:
+      se crea en Google AI Studio, no desde la app.
+- [ ] Un módulo generado llega con citas. **Si llega sin ellas la app lo advierte**, y esa
+      advertencia hay que tomársela en serio: significa que no está anclado en tus documentos.
+- [ ] Exportar el progreso y comprobar con una búsqueda de texto que la clave de Gemini **no**
+      aparece en el JSON.
 
 ---
 

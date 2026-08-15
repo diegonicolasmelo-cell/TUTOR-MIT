@@ -297,19 +297,44 @@ var Taller = (function () {
     return texto;
   }
 
+  /* Google Docs sustituye las comillas rectas por tipográficas al
+     pegar, y eso basta para que JSON.parse falle entero. Como es
+     precisamente lo que ocurre al usar un Doc de bandeja, hay que
+     contemplarlo o esa vía no sirve de nada. */
+  function enderezarComillas(t) {
+    return t
+      .replace(/[“”„‟«»]/g, '"')
+      .replace(/[‘’‚‛]/g, "'");
+  }
+
   function validar(bruto) {
     var errores = [], avisos = [];
     var datos;
+    var texto = extraerJson(bruto);
 
     try {
-      datos = JSON.parse(extraerJson(bruto));
+      datos = JSON.parse(texto);
     } catch (e) {
-      return {
-        ok: false,
-        errores: ['El texto no es un JSON válido. ' + e.message +
-          '  ·  Comprueba que has pegado el objeto completo, desde la primera llave { hasta la última }.'],
-        avisos: []
-      };
+      /* Se reintenta enderezando las comillas, pero solo como
+         segundo intento: hacerlo siempre estropearía un texto que
+         legítimamente lleve comillas tipográficas dentro de un
+         valor. Si el reintento también falla, se informa del error
+         original, que es el que describe el problema de verdad. */
+      var rescatado = null;
+      try { rescatado = JSON.parse(enderezarComillas(texto)); } catch (e2) { rescatado = null; }
+
+      if (rescatado === null) {
+        return {
+          ok: false,
+          errores: ['El texto no es un JSON válido. ' + e.message +
+            '  ·  Comprueba que has pegado el objeto completo, desde la primera llave { hasta la última }.'],
+          avisos: []
+        };
+      }
+      datos = rescatado;
+      avisos.push('El documento traía comillas tipográficas («») en lugar de rectas ("). ' +
+        'Es lo que hace Google Docs al pegar; se corrigieron solas, pero revisa que ningún ' +
+        'texto haya perdido comillas que fueran intencionadas.');
     }
 
     /* Normalización: se acepta un tema suelto o una lista. */
@@ -586,7 +611,8 @@ var Taller = (function () {
    VISTA — Taller
    ============================================================ */
 
-var TallerEstado = { paso: 1, prompt: '', validacion: null, cfg: null };
+var TallerEstado = { paso: 1, prompt: '', validacion: null, cfg: null,
+  via: 'pegar', bruto: '', almacenes: null, almacen: '', gemini: null };
 
 UI.registrar('taller', {
   titulo: 'Taller de contenido',
@@ -675,9 +701,74 @@ UI.registrar('taller', {
       '</div></div>';
 
     /* --- paso 3: importar --- */
-    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>3 · Pega aquí la respuesta</h3></div>' +
-      '<p class="sm tenue">Copia el JSON completo que te devuelva y pégalo tal cual. Si viene envuelto en comillas de código o con una frase delante, la app lo recorta sola.</p>' +
-      '<textarea id="t-json" style="min-height:150px;font-family:var(--mono);font-size:.78rem" placeholder=\'{ "area": { … }, "modulo": { … }, "temas": [ … ] }\'></textarea>' +
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>3 · Trae la respuesta</h3></div>';
+
+    /* Dos vías para lo mismo. La del Doc existe porque copiar 9 KB
+       de JSON entre apps en el móvil es justo donde se rompe el
+       flujo; pegar en un Doc que ya tienes abierto, no. */
+    var via = TallerEstado.via;
+    function pestana(id, texto) {
+      return '<button class="btn btn-s' + (via === id ? ' btn-primario' : '') +
+        '" data-accion="taller-via" data-via="' + id + '">' + texto + '</button>';
+    }
+    html += '<div class="linea segmentado mt">' +
+      pestana('pegar', 'Pegar el JSON') +
+      pestana('doc', 'Desde un Google Doc') +
+      pestana('gemini', 'Generar con mis fuentes') +
+      '</div>';
+
+    if (via === 'gemini') {
+      html += '<p class="sm tenue mt">Consulta tus documentos y escribe el módulo sin que ' +
+        'copies ni pegues nada. Las fuentes se suben una sola vez a un almacén de ' +
+        '<b>File Search</b> desde Google AI Studio; aquí solo se elige cuál usar.</p>';
+
+      if (!Puente.disponible()) {
+        html += '<div class="aviso aviso-alerta mt" id="t-sin-puente">' + UI.esc(Puente.motivo) + '</div>';
+      } else if (TallerEstado.gemini && !TallerEstado.gemini.configurada) {
+        html += '<div class="aviso aviso-alerta mt">Falta la clave de Gemini. ' +
+          'Ponla en <b>Ajustes → Generación con mis fuentes</b>.</div>';
+      }
+
+      html += '<div class="linea mt"><select id="t-almacen" class="crece">' +
+        (TallerEstado.almacenes && TallerEstado.almacenes.length
+          ? TallerEstado.almacenes.map(function (a) {
+              return '<option value="' + UI.esc(a.nombre) + '"' +
+                (TallerEstado.almacen === a.nombre ? ' selected' : '') + '>' +
+                UI.esc(a.titulo) + '</option>';
+            }).join('')
+          : '<option value="">— sin almacenes cargados —</option>') +
+        '</select>' +
+        '<button class="btn btn-s btn-fantasma" data-accion="taller-almacenes">Buscar</button></div>';
+
+      html += '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="taller-generar-gemini">Generar el módulo</button>' +
+        '</div>' +
+        '<p class="sm tenue mt">Necesita el prompt del paso 2. Sin almacén el modelo respondería ' +
+        'de memoria, que es justo lo que queremos evitar, así que la app avisa si ocurre.</p>' +
+        '<div id="t-gemini"></div>';
+    }
+
+    if (via === 'doc') {
+      html += '<p class="sm tenue mt">Pega la respuesta de NotebookLM en un Documento de Google ' +
+        'y tráela desde aquí. No hace falta que borres el texto de alrededor: la app recorta el JSON sola.</p>';
+
+      if (!Puente.disponible()) {
+        html += '<div class="aviso aviso-alerta mt" id="t-sin-puente">' + UI.esc(Puente.motivo) + '</div>';
+      }
+
+      html += '<div class="linea mt">' +
+        '<input id="t-doc" class="crece" placeholder="Pega el enlace del documento…">' +
+        '<button class="btn btn-primario" data-accion="taller-traer-doc">Traer</button></div>' +
+        '<div class="linea mt"><button class="btn btn-s btn-fantasma" data-accion="taller-listar-docs">' +
+        'Ver mis documentos recientes</button></div>' +
+        '<div id="t-docs"></div>';
+    } else if (via === 'pegar') {
+      html += '<p class="sm tenue mt">Copia el JSON completo que te devuelva y pégalo tal cual. ' +
+        'Si viene envuelto en comillas de código o con una frase delante, la app lo recorta sola.</p>';
+    }
+
+    html += '<textarea id="t-json" style="min-height:150px;font-family:var(--mono);font-size:.78rem" placeholder=\'{ "area": { … }, "modulo": { … }, "temas": [ … ] }\'>' +
+      UI.esc(TallerEstado.bruto || '') + '</textarea>' +
       '<div class="linea mt"><button class="btn btn-primario" data-accion="taller-validar">Validar</button>' +
       '<button class="btn btn-fantasma" data-accion="taller-limpiar">Limpiar</button></div>' +
       '<div id="t-resultado"></div>' +

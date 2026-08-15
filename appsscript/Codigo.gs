@@ -131,6 +131,245 @@ function reiniciarEstado() {
 }
 
 /* ------------------------------------------------------------
+   GOOGLE DOCS COMO BANDEJA DE ENTRADA
+   ------------------------------------------------------------
+   NotebookLM no tiene API pública, así que la app no puede
+   pedirle nada directamente. Lo que sí puede es recoger la
+   respuesta sin pasar por el portapapeles: pegas lo que te
+   devuelva NotebookLM en un Google Doc y la app lo lee de ahí.
+
+   Parece un rodeo y es justo al revés: en el móvil, copiar 9 KB
+   de JSON de una app a otra es donde se rompe el flujo. Pegar en
+   un Doc que ya tienes abierto, no.
+   ------------------------------------------------------------ */
+
+/** Acepta una URL completa de Docs, un enlace corto o el propio ID. */
+function extraerIdDoc_(referencia) {
+  var t = String(referencia || '').trim();
+  if (!t) return null;
+  var m = t.match(/\/d\/([a-zA-Z0-9_-]{20,})/);      // .../document/d/<ID>/edit
+  if (m) return m[1];
+  m = t.match(/[?&]id=([a-zA-Z0-9_-]{20,})/);        // ...open?id=<ID>
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(t)) return t;      // el ID pelado
+  return null;
+}
+
+function leerDocumento(referencia) {
+  var id = extraerIdDoc_(referencia);
+  if (!id) {
+    return { ok: false, error: 'No reconozco ese enlace. Pega la URL completa del ' +
+      'documento (la que empieza por docs.google.com/document/d/…) o su identificador.' };
+  }
+  try {
+    var doc = DocumentApp.openById(id);
+    return { ok: true, id: id, nombre: doc.getName(), texto: doc.getBody().getText() };
+  } catch (e) {
+    /* Puede no ser un Doc nativo sino un .txt o .json subido a
+       Drive, que también sirve como bandeja. */
+    try {
+      var f = DriveApp.getFileById(id);
+      var tipo = f.getMimeType();
+      if (tipo === 'text/plain' || tipo === 'application/json') {
+        return { ok: true, id: id, nombre: f.getName(),
+          texto: f.getBlob().getDataAsString('UTF-8') };
+      }
+      return { ok: false, error: 'Ese archivo es de tipo «' + tipo + '», y solo puedo ' +
+        'leer Documentos de Google, .txt o .json.' };
+    } catch (e2) {
+      return { ok: false, error: 'No pude abrirlo. Comprueba que el documento existe y ' +
+        'que es de tu cuenta: ' + (e2.message || e2) };
+    }
+  }
+}
+
+/** Los Docs tocados hace poco: en el móvil elegir de una lista
+    es bastante menos trabajo que pegar una URL. */
+function listarDocsRecientes() {
+  try {
+    var it = DriveApp.searchFiles(
+      'mimeType = "application/vnd.google-apps.document" and trashed = false');
+    var lista = [];
+    var tope = 0;
+    while (it.hasNext() && tope < 60) {
+      var f = it.next();
+      tope++;
+      lista.push({ id: f.getId(), nombre: f.getName(), modificado: f.getLastUpdated().toISOString() });
+    }
+    lista.sort(function (a, b) { return a.modificado < b.modificado ? 1 : -1; });
+    return { ok: true, docs: lista.slice(0, 15) };
+  } catch (e) {
+    return { ok: false, error: 'No pude listar tus documentos: ' + (e.message || e) };
+  }
+}
+
+/* ------------------------------------------------------------
+   GEMINI CON FILE SEARCH
+   ------------------------------------------------------------
+   La sustitución real de NotebookLM. File Search es RAG
+   gestionado: subes tus papers a un almacén y el modelo responde
+   anclado en ellos. Es el mismo mecanismo que usa NotebookLM por
+   dentro, pero con API, así que el Taller puede generar el módulo
+   sin que copies ni pegues nada.
+
+   La subida de documentos al almacén se hace UNA VEZ desde
+   Google AI Studio, que ya tiene interfaz para ello. Aquí solo
+   se listan los almacenes y se consulta: es la parte que la app
+   necesita en cada uso.
+
+   La clave vive en las propiedades del usuario y NUNCA en el
+   estado de la app. Importa: el estado se puede exportar desde
+   Ajustes, y una clave dentro de ese JSON viajaría en cualquier
+   copia que compartas o guardes.
+   ------------------------------------------------------------ */
+
+var CLAVE_GEMINI = 'TUTOR_MIT_GEMINI_KEY';
+var MODELO_GEMINI = 'TUTOR_MIT_GEMINI_MODELO';
+var BASE_GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+
+function guardarClaveGemini(clave, modelo) {
+  var props = PropertiesService.getUserProperties();
+  var k = String(clave || '').trim();
+  if (!k) return { ok: false, error: 'La clave está vacía.' };
+  props.setProperty(CLAVE_GEMINI, k);
+  if (modelo) props.setProperty(MODELO_GEMINI, String(modelo).trim());
+  return { ok: true };
+}
+
+function borrarClaveGemini() {
+  PropertiesService.getUserProperties().deleteProperty(CLAVE_GEMINI);
+  return { ok: true };
+}
+
+/** Nunca devuelve la clave, solo si está puesta. */
+function estadoGemini() {
+  var props = PropertiesService.getUserProperties();
+  var k = props.getProperty(CLAVE_GEMINI);
+  return {
+    ok: true,
+    configurada: !!k,
+    pista: k ? ('…' + k.slice(-4)) : '',
+    modelo: props.getProperty(MODELO_GEMINI) || 'gemini-flash-latest'
+  };
+}
+
+function claveGemini_() {
+  return PropertiesService.getUserProperties().getProperty(CLAVE_GEMINI);
+}
+
+/** Llamada HTTP con los errores legibles en vez de una excepción. */
+function pedirGemini_(ruta, metodo, cuerpo) {
+  var clave = claveGemini_();
+  if (!clave) {
+    return { ok: false, error: 'No hay clave de Gemini guardada. Ponla en Ajustes.' };
+  }
+  var opciones = {
+    method: metodo,
+    muteHttpExceptions: true,
+    headers: { 'x-goog-api-key': clave }
+  };
+  if (cuerpo) {
+    opciones.contentType = 'application/json';
+    opciones.payload = JSON.stringify(cuerpo);
+  }
+  try {
+    var res = UrlFetchApp.fetch(BASE_GEMINI + ruta, opciones);
+    var codigo = res.getResponseCode();
+    var texto = res.getContentText();
+    var datos = null;
+    try { datos = JSON.parse(texto); } catch (e) { /* respuesta no-JSON */ }
+
+    if (codigo >= 200 && codigo < 300) return { ok: true, datos: datos };
+
+    var msg = (datos && datos.error && datos.error.message) ? datos.error.message : texto.slice(0, 300);
+    if (codigo === 401 || codigo === 403) {
+      msg = 'La clave no es válida o no tiene permiso para este modelo. ' + msg;
+    } else if (codigo === 429) {
+      msg = 'Has superado la cuota de la API por ahora. ' + msg;
+    }
+    return { ok: false, error: 'Gemini respondió ' + codigo + ': ' + msg };
+  } catch (e) {
+    return { ok: false, error: 'No se pudo contactar con Gemini: ' + (e.message || e) };
+  }
+}
+
+/** Comprueba que la clave sirve de verdad, con la llamada más barata posible. */
+function probarGemini() {
+  var r = pedirGemini_('/models', 'get', null);
+  if (!r.ok) return r;
+  var modelos = (r.datos && r.datos.models) ? r.datos.models.length : 0;
+  return { ok: true, modelos: modelos };
+}
+
+function listarAlmacenesGemini() {
+  var r = pedirGemini_('/fileSearchStores', 'get', null);
+  if (!r.ok) return r;
+  var lista = (r.datos && r.datos.fileSearchStores) || [];
+  return {
+    ok: true,
+    almacenes: lista.map(function (a) {
+      return { nombre: a.name, titulo: a.displayName || a.name };
+    })
+  };
+}
+
+/**
+ * Genera contenido anclado en los documentos del almacén.
+ * Devuelve el texto tal cual: lo valida el mismo Taller que
+ * valida lo que pegas a mano, así que no hay una vía con menos
+ * comprobaciones que la otra.
+ */
+function generarConGemini(prompt, almacen) {
+  var props = PropertiesService.getUserProperties();
+  var modelo = props.getProperty(MODELO_GEMINI) || 'gemini-flash-latest';
+
+  var cuerpo = {
+    contents: [{ parts: [{ text: String(prompt || '') }] }]
+  };
+  /* Sin almacén sigue funcionando, pero entonces el modelo
+     responde de memoria y eso es justo lo que hay que evitar:
+     se avisa al cliente para que lo diga en pantalla. */
+  if (almacen) {
+    cuerpo.tools = [{ fileSearch: { fileSearchStoreNames: [almacen] } }];
+  }
+
+  var r = pedirGemini_('/models/' + encodeURIComponent(modelo) + ':generateContent', 'post', cuerpo);
+  if (!r.ok) return r;
+
+  var cand = (r.datos && r.datos.candidates && r.datos.candidates[0]) || null;
+  if (!cand) {
+    var bloqueo = r.datos && r.datos.promptFeedback && r.datos.promptFeedback.blockReason;
+    return { ok: false, error: bloqueo
+      ? 'Gemini bloqueó la petición (' + bloqueo + ').'
+      : 'Gemini no devolvió ninguna respuesta.' };
+  }
+
+  var partes = (cand.content && cand.content.parts) || [];
+  var texto = partes.map(function (p) { return p.text || ''; }).join('');
+  if (!texto.trim()) {
+    return { ok: false, error: 'La respuesta llegó vacía (motivo: ' +
+      (cand.finishReason || 'desconocido') + ').' };
+  }
+
+  /* Las citas permiten comprobar de qué documento salió cada cosa,
+     que es la diferencia entre material anclado y material inventado. */
+  var citas = [];
+  var meta = cand.groundingMetadata;
+  if (meta && meta.groundingChunks) {
+    meta.groundingChunks.forEach(function (c) {
+      var t = (c.retrievedContext && c.retrievedContext.title) || (c.web && c.web.title);
+      if (t && citas.indexOf(t) < 0) citas.push(t);
+    });
+  }
+
+  return {
+    ok: true, texto: texto, modelo: modelo,
+    anclado: !!almacen, citas: citas,
+    finalizacion: cand.finishReason || ''
+  };
+}
+
+/* ------------------------------------------------------------
    OPCIONAL — Registro de sesiones en Google Sheets
    Útil para llevar un histórico fuera de la app y hacer
    gráficos propios. Llamar desde el cliente si se desea.

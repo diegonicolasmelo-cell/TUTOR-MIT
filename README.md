@@ -116,10 +116,58 @@ completas en tres pasos, todos dentro de la interfaz:
    («faltan preguntas de nivel 3», «el caso necesita al menos 3 pasos»), sanea el HTML,
    muestra una vista previa y lo integra al temario, al plan y al mazo de tarjetas.
 
+### Tres vías para traer la respuesta
+
+Las tres acaban en el **mismo validador**, así que ninguna tiene menos comprobaciones que otra.
+
+1. **Pegar el JSON.** Lo de siempre. Funciona en cualquier versión, incluida la del navegador.
+2. **Desde un Google Doc.** Pegas la respuesta de NotebookLM en un Documento y la app la lee
+   sola. Parece un rodeo y es al revés: en el móvil, copiar 9 KB de JSON entre dos apps es
+   justo donde se rompe el flujo; pegar en un Doc que ya tienes abierto, no. Puedes elegir el
+   documento de una lista de recientes en lugar de pegar la URL.
+3. **Generar con mis fuentes.** La app consulta tus papers y escribe el módulo sin que copies
+   ni pegues nada. Ver más abajo.
+
+Las vías 2 y 3 **solo existen en la versión instalada en Apps Script**, porque en el navegador
+no hay acceso a Drive ni a la red. La app lo dice con todas las letras en vez de fingir que
+funcionan.
+
+Un detalle que decide si la vía 2 sirve o no: **Google Docs sustituye las comillas rectas por
+tipográficas al pegar**, y eso basta para que `JSON.parse` falle entero. El validador lo
+reintenta enderezándolas, pero solo como segundo intento —hacerlo siempre estropearía un texto
+que legítimamente lleve comillas tipográficas dentro de un valor— y avisa de que lo hizo.
+
 Si pides alternativas, el prompt no se limita a pedir «4 opciones»: exige que cada distractor
 sea un error conceptual real y que traiga escrita su razón, igual que el banco de fábrica. El
 validador **rechaza toda pregunta que no tenga exactamente una opción correcta** y avisa de
 cuál descartó, en vez de importar una pregunta rota en silencio.
+
+### Generar con mis fuentes (Gemini + File Search)
+
+**NotebookLM no tiene API pública.** A agosto de 2026 Google reconoce la demanda pero no hay
+beta, ni lista de espera, ni fecha; lo único documentado es la API de *Gemini Notebook
+Enterprise*, en preview y solo para clientes empresariales. Así que la app **no puede pedirle
+nada a NotebookLM**, y cualquier cosa que diga lo contrario está describiendo un scraper no
+oficial que se romperá.
+
+Lo que sí puede es hacer lo mismo por su cuenta. **File Search** es RAG gestionado dentro de
+la API de Gemini: indexa los documentos que tú subes y responde anclado en ellos, con citas al
+documento de origen. Es el mismo mecanismo que NotebookLM usa por dentro, con API.
+
+El reparto de trabajo es deliberado:
+
+- **Una vez, en Google AI Studio:** creas la clave, creas un almacén de File Search y subes
+  tus papers. Esa parte ya tiene interfaz propia y no hace falta duplicarla.
+- **En cada uso, desde la app:** eliges el almacén y pulsas generar.
+
+Dos salvaguardas que importan más que la comodidad:
+
+- **La clave se guarda en el servidor, en tu cuenta de Google, y no entra en el progreso
+  exportable.** Si algún día compartes tu copia de seguridad, la clave no viaja dentro.
+- **Si la respuesta llega sin citas, la app lo dice.** Y si generas sin elegir almacén, avisa
+  de que eso lo escribió el modelo de memoria y hay que tratarlo como borrador. El objetivo
+  de todo esto era no estudiar de material alucinado; callarse cuando falta el anclaje sería
+  romper justo eso.
 
 Tres decisiones que importan:
 
@@ -168,6 +216,7 @@ assets/
   datos-mcq.js              banco de preguntas de alternativa (63, en 27 temas)
   almacen.js                capa de persistencia intercambiable + reglas de negocio
   ui.js                     utilidades, enrutador y cronómetro
+  puente.js                 único punto que llama al servidor: Docs, Drive y Gemini
   asistente.js              Minerva: motor de reglas y panel
   taller.js                 esquema, generador de prompt, validador, saneado e importador
   vistas.js                 inicio, áreas, temario, ficha, plan, rendimiento, prompt, ajustes

@@ -286,6 +286,49 @@ UI.accion('guardar-srs', function () {
   UI.brindis('Preferencias de repaso guardadas');
 });
 
+/* --- clave de Gemini --- */
+UI.accion('gemini-guardar', function () {
+  var clave = (UI.$('#a-gemini-clave') || {}).value || '';
+  var modelo = (UI.$('#a-gemini-modelo') || {}).value || '';
+  if (!clave.trim()) { UI.brindis('Pega primero la clave'); return; }
+
+  var caja = UI.$('#a-gemini-estado');
+  if (caja) caja.innerHTML = '<div class="sm tenue mt">Guardando y probando…</div>';
+
+  Puente.guardarClave(clave.trim(), modelo.trim()).then(function (r) {
+    if (!r.ok) {
+      if (caja) caja.innerHTML = '<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>';
+      return;
+    }
+    /* Guardar sin probar dejaría el fallo para el peor momento:
+       cuando esté esperando un módulo generado. */
+    return Puente.probarClave().then(function (p) {
+      var el = UI.$('#a-gemini-estado');
+      if (!el) return;
+      if (!p.ok) {
+        el.innerHTML = '<div class="aviso aviso-acento mt"><b>Guardada, pero no funciona.</b> ' +
+          UI.esc(p.error) + '</div>';
+        UI.brindis('La clave no responde');
+        return;
+      }
+      el.innerHTML = '<div class="aviso aviso-ok mt"><b>Clave verificada.</b> ' +
+        p.modelos + ' modelos disponibles.</div>';
+      var campo = UI.$('#a-gemini-clave');
+      if (campo) campo.value = '';
+      UI.brindis('Clave verificada');
+    });
+  });
+});
+
+UI.accion('gemini-borrar', function () {
+  Puente.borrarClave().then(function () {
+    TallerEstado.gemini = null;
+    var caja = UI.$('#a-gemini-estado');
+    if (caja) caja.innerHTML = '<div class="sm tenue mt">Clave borrada.</div>';
+    UI.brindis('Clave borrada');
+  });
+});
+
 UI.accion('tema-visual', function (d) {
   Estado.guardarAjustes({ tema: d.valor });
   UI.aplicarTema(d.valor);
@@ -599,11 +642,152 @@ UI.accion('taller-limpiar', function () {
   UI.$('#t-json').value = '';
   UI.$('#t-resultado').innerHTML = '';
   TallerEstado.validacion = null;
+  TallerEstado.bruto = '';
+});
+
+/* --- vía de entrada: portapapeles o Google Doc --- */
+UI.accion('taller-via', function (d) {
+  /* Se conserva lo ya escrito al cambiar de pestaña: perder un
+     pegado de 9 KB por tocar un botón sería inaceptable. */
+  var caja = UI.$('#t-json');
+  if (caja) TallerEstado.bruto = caja.value;
+  TallerEstado.via = d.via;
+  UI.refrescar();
+
+  /* Al entrar en la vía Gemini se consulta si hay clave, para
+     poder decirlo antes de que pulse «Generar» y falle. */
+  if (d.via === 'gemini' && Puente.disponible() && !TallerEstado.gemini) {
+    Puente.estadoClave().then(function (r) {
+      TallerEstado.gemini = r.ok ? r : { configurada: false };
+      if (UI.rutaActual() === 'taller') UI.refrescar();
+    });
+  }
+});
+
+/* --- vía Gemini + File Search --- */
+UI.accion('taller-almacenes', function () {
+  var caja = UI.$('#t-gemini');
+  if (caja) caja.innerHTML = '<div class="sm tenue mt">Buscando almacenes…</div>';
+  Puente.almacenes().then(function (r) {
+    caja = UI.$('#t-gemini');
+    if (!r.ok) {
+      if (caja) caja.innerHTML = '<div class="aviso aviso-alerta mt">' + UI.esc(r.error) + '</div>';
+      return;
+    }
+    TallerEstado.almacenes = r.almacenes;
+    if (r.almacenes.length && !TallerEstado.almacen) TallerEstado.almacen = r.almacenes[0].nombre;
+    UI.refrescar();
+    UI.brindis(r.almacenes.length
+      ? r.almacenes.length + (r.almacenes.length === 1 ? ' almacén encontrado' : ' almacenes encontrados')
+      : 'No tienes almacenes de File Search todavía. Créalo en Google AI Studio y sube ahí tus papers.');
+  });
+});
+
+UI.accion('taller-generar-gemini', function () {
+  if (!TallerEstado.prompt) {
+    UI.brindis('Genera antes el prompt en el paso 2');
+    return;
+  }
+  var sel = UI.$('#t-almacen');
+  var almacen = sel ? sel.value : '';
+  TallerEstado.almacen = almacen;
+
+  var caja = UI.$('#t-gemini');
+  if (caja) {
+    caja.innerHTML = '<div class="aviso mt">Consultando tus documentos… ' +
+      'esto tarda bastante más que una respuesta corta, porque está escribiendo un módulo entero.</div>';
+  }
+
+  Puente.generar(TallerEstado.prompt, almacen).then(function (r) {
+    caja = UI.$('#t-gemini');
+    if (!r.ok) {
+      if (caja) caja.innerHTML = '<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>';
+      UI.brindis('No se pudo generar');
+      return;
+    }
+
+    TallerEstado.bruto = r.texto;
+    var v = Taller.validar(r.texto);
+    TallerEstado.validacion = v;
+    UI.refrescar();
+
+    var cabecera = '';
+    if (!r.anclado) {
+      cabecera += '<div class="aviso aviso-acento mt"><b>Sin anclar a tus fuentes.</b> ' +
+        'No se eligió almacén, así que esto lo escribió el modelo de memoria. ' +
+        'Trátalo como un borrador, no como material de estudio.</div>';
+    } else if (!r.citas.length) {
+      cabecera += '<div class="aviso aviso-alerta mt"><b>Sin citas.</b> Se usó el almacén, ' +
+        'pero la respuesta no señala de qué documento salió cada cosa. Revísala con más cuidado.</div>';
+    } else {
+      cabecera += '<div class="aviso aviso-ok mt"><b>Anclado en tus documentos:</b> ' +
+        r.citas.map(function (c) { return UI.esc(c); }).join(' · ') + '</div>';
+    }
+
+    var res = UI.$('#t-gemini');
+    if (res) res.innerHTML = cabecera;
+    var salida = UI.$('#t-resultado');
+    if (salida) salida.innerHTML = pintarValidacion(v);
+    UI.brindis(v.ok ? 'Módulo generado · estructura correcta' : 'Módulo generado · revisa los errores');
+  });
+});
+
+UI.accion('taller-traer-doc', function () {
+  var ref = (UI.$('#t-doc') || {}).value || '';
+  if (!ref.trim()) { UI.brindis('Pega primero el enlace del documento'); return; }
+  traerDeDoc(ref.trim());
+});
+
+UI.accion('taller-doc-elegir', function (d) { traerDeDoc(d.id); });
+
+function traerDeDoc(referencia) {
+  UI.brindis('Leyendo el documento…');
+  Puente.leerDoc(referencia).then(function (r) {
+    if (!r.ok) { UI.brindis(r.error); return; }
+    if (!r.texto || !r.texto.trim()) {
+      UI.brindis('«' + r.nombre + '» está vacío.');
+      return;
+    }
+    TallerEstado.bruto = r.texto;
+    UI.refrescar();
+    /* Validar en el acto: traerlo y no decir si sirve dejaría el
+       trabajo a medias justo donde el usuario espera respuesta. */
+    var v = Taller.validar(r.texto);
+    TallerEstado.validacion = v;
+    UI.$('#t-resultado').innerHTML = pintarValidacion(v);
+    UI.brindis(v.ok
+      ? 'Traído de «' + r.nombre + '» · estructura correcta'
+      : 'Traído de «' + r.nombre + '» · revisa los errores');
+  });
+}
+
+UI.accion('taller-listar-docs', function () {
+  var caja = UI.$('#t-docs');
+  if (caja) caja.innerHTML = '<div class="sm tenue mt">Buscando…</div>';
+  Puente.docsRecientes().then(function (r) {
+    caja = UI.$('#t-docs');
+    if (!caja) return;
+    if (!r.ok) {
+      caja.innerHTML = '<div class="aviso aviso-alerta mt">' + UI.esc(r.error) + '</div>';
+      return;
+    }
+    if (!r.docs.length) {
+      caja.innerHTML = '<div class="sm tenue mt">No encontré documentos en tu Drive.</div>';
+      return;
+    }
+    caja.innerHTML = '<div class="mt">' + r.docs.map(function (doc) {
+      return '<div class="fila"><div class="crece"><div class="titulo">' + UI.esc(doc.nombre) + '</div>' +
+        '<div class="sub">' + UI.fechaCorta(doc.modificado.slice(0, 10)) + '</div></div>' +
+        '<button class="btn btn-s btn-fantasma" data-accion="taller-doc-elegir" data-id="' +
+        UI.esc(doc.id) + '">Traer</button></div>';
+    }).join('') + '</div>';
+  });
 });
 
 UI.accion('taller-validar', function () {
   var bruto = UI.$('#t-json').value;
   if (!bruto.trim()) { UI.brindis('Pega primero la respuesta'); return; }
+  TallerEstado.bruto = bruto;
 
   var r = Taller.validar(bruto);
   TallerEstado.validacion = r;

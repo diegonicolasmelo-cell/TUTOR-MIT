@@ -40,6 +40,7 @@ const SCRIPTS_DATOS = [
 const SCRIPTS_APP = [
   'almacen.js',
   'ui.js',
+  'puente.js',
   'asistente.js',
   'vistas.js',
   'taller.js',
@@ -177,7 +178,12 @@ fs.writeFileSync(path.join(APPSSCRIPT, 'appsscript.json'),
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/spreadsheets',
       'https://www.googleapis.com/auth/script.send_mail',
-      'https://www.googleapis.com/auth/userinfo.email'
+      'https://www.googleapis.com/auth/userinfo.email',
+      /* leer la respuesta pegada en un Google Doc */
+      'https://www.googleapis.com/auth/documents.readonly',
+      'https://www.googleapis.com/auth/drive.readonly',
+      /* llamar a la API de Gemini desde UrlFetchApp */
+      'https://www.googleapis.com/auth/script.external_request'
     ]
   }, null, 2) + '\n');
 

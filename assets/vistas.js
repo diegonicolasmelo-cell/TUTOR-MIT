@@ -615,6 +615,35 @@ UI.registrar('ajustes', {
       '<button data-accion="alternar-asistente" data-valor="0" class="' + (!a.asistente ? 'sel' : '') + '">Desactivada</button>' +
       '</div></div>';
 
+    /* --- Gemini con File Search --- */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Generación con mis fuentes</h3>' +
+      '<div class="der" id="a-gemini-etiq"></div></div>' +
+      '<p class="sm tenue">NotebookLM no tiene API pública, así que la app no puede pedirle nada. ' +
+      'Lo que sí puede es hacer lo mismo por su cuenta: <b>File Search</b> de la API de Gemini indexa ' +
+      'los papers que tú subes y responde anclado en ellos, con citas al documento de origen. ' +
+      'Con esto el Taller genera el módulo sin que copies ni pegues nada.</p>' +
+      '<ol class="sm tenue" style="padding-left:18px;margin:8px 0">' +
+      '<li>Crea una clave en Google AI Studio.</li>' +
+      '<li>Crea ahí un almacén de File Search y sube tus papers <b>una sola vez</b>.</li>' +
+      '<li>Pega la clave aquí y elige el almacén en el Taller.</li></ol>';
+
+    if (!Puente.disponible()) {
+      html += '<div class="aviso aviso-alerta">' + UI.esc(Puente.motivo) + '</div>';
+    } else {
+      html += '<label class="campo"><span>Clave de la API de Gemini</span>' +
+        '<input type="password" id="a-gemini-clave" placeholder="AIza…" autocomplete="off"></label>' +
+        '<label class="campo"><span>Modelo</span>' +
+        '<input type="text" id="a-gemini-modelo" placeholder="gemini-flash-latest"></label>' +
+        '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="gemini-guardar">Guardar y probar</button>' +
+        '<button class="btn btn-fantasma" data-accion="gemini-borrar">Borrar la clave</button></div>' +
+        '<div id="a-gemini-estado"></div>' +
+        '<p class="sm tenue mt">La clave se guarda en tu cuenta de Google, en el servidor, y ' +
+        '<b>no entra en el progreso exportable</b>: si algún día compartes tu copia de seguridad, ' +
+        'no viaja dentro. Consumir la API tiene coste según lo que uses.</p>';
+    }
+    html += '</div>';
+
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Áreas del conocimiento</h3>' +
       '<div class="der"><span class="etiq etiq-info">' + Estado.areasActivas().length + ' activas</span></div></div>' +
       '<p class="sm tenue">Activa o pausa áreas completas para concentrar el plan y el mazo de tarjetas en lo que toca ahora.</p>' +

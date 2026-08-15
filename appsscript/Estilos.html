@@ -483,6 +483,15 @@ label.campo > span { display: block; font-size: .78rem; font-weight: 650; color:
 /* ---------------- Utilidades ---------------- */
 
 .pila { display: flex; flex-direction: column; gap: 12px; }
+/* Dos vías para lo mismo, presentadas como un selector y no como
+   dos botones sueltos, para que se lea que son alternativas. */
+.segmentado {
+  gap: 4px; background: var(--superficie-2); padding: 4px;
+  border-radius: 10px; display: inline-flex;
+}
+.segmentado .btn { border-color: transparent; background: none; }
+.segmentado .btn-primario { border-color: transparent; }
+
 .linea { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .linea.fin { justify-content: flex-end; }
 .linea.entre { justify-content: space-between; }
