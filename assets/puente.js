@@ -68,6 +68,15 @@ var Puente = (function () {
     estadoClave: function () { return llamar('estadoGemini'); },
     probarClave: function () { return llamar('probarGemini'); },
     almacenes: function () { return llamar('listarAlmacenesGemini'); },
-    generar: function (prompt, almacen) { return llamar('generarConGemini', prompt, almacen); }
+    generar: function (prompt, almacen) { return llamar('generarConGemini', prompt, almacen); },
+
+    /* --- base de datos en Sheets --- */
+    bdEstado: function () { return llamar('estadoBaseDeDatos'); },
+    bdCrear: function (titulo) { return llamar('crearBaseDeDatos', titulo); },
+    bdVincular: function (ref) { return llamar('vincularBaseDeDatos', ref); },
+    bdOlvidar: function () { return llamar('olvidarBaseDeDatos'); },
+    bdVolcar: function (seccion, filas) { return llamar('volcarSeccion', seccion, filas); },
+    bdFinalizar: function (meta) { return llamar('finalizarVolcado', meta); },
+    bdLeerContenido: function () { return llamar('leerContenidoBD'); }
   };
 })();

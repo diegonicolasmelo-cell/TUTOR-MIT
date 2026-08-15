@@ -286,6 +286,93 @@ UI.accion('guardar-srs', function () {
   UI.brindis('Preferencias de repaso guardadas');
 });
 
+/* --- base de datos en Sheets --- */
+function pintarBD(html) {
+  var caja = UI.$('#a-bd-estado');
+  if (caja) caja.innerHTML = html;
+}
+
+function enlaceHoja(r) {
+  return '<a class="btn btn-s btn-fantasma" href="' + UI.esc(r.url) +
+    '" target="_blank" rel="noopener noreferrer">Abrir la hoja ↗</a>';
+}
+
+UI.accion('bd-estado', function () {
+  pintarBD('<div class="sm tenue mt">Consultando…</div>');
+  Puente.bdEstado().then(function (r) {
+    if (!r.ok) { pintarBD('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    if (!r.configurada) {
+      pintarBD('<div class="aviso aviso-alerta mt">' +
+        UI.esc(r.aviso || 'Todavía no hay ninguna hoja vinculada.') + '</div>');
+      return;
+    }
+    pintarBD('<div class="aviso aviso-ok mt"><b>' + UI.esc(r.titulo) + '</b><div class="linea mt">' +
+      enlaceHoja(r) + '<button class="btn btn-s btn-fantasma" data-accion="bd-olvidar">Desvincular</button>' +
+      '</div></div>');
+  });
+});
+
+UI.accion('bd-crear', function () {
+  pintarBD('<div class="sm tenue mt">Creando la hoja y sus 13 pestañas…</div>');
+  Puente.bdCrear('Tutor MIT · base de datos').then(function (r) {
+    if (!r.ok) { pintarBD('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarBD('<div class="aviso aviso-ok mt"><b>Hoja creada:</b> ' + UI.esc(r.titulo) +
+      '<div class="sm tenue">Está vacía hasta que pulses «Volcar ahora».</div>' +
+      '<div class="linea mt">' + enlaceHoja(r) + '</div></div>');
+    UI.brindis('Hoja creada · ahora vuelca los datos');
+  });
+});
+
+UI.accion('bd-vincular', function () {
+  var ref = (UI.$('#a-bd-url') || {}).value || '';
+  if (!ref.trim()) { UI.brindis('Pega primero el enlace de la hoja'); return; }
+  pintarBD('<div class="sm tenue mt">Comprobando…</div>');
+  Puente.bdVincular(ref.trim()).then(function (r) {
+    if (!r.ok) { pintarBD('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarBD('<div class="aviso aviso-ok mt"><b>Vinculada:</b> ' + UI.esc(r.titulo) +
+      '<div class="linea mt">' + enlaceHoja(r) + '</div></div>');
+    UI.brindis('Hoja vinculada');
+  });
+});
+
+UI.accion('bd-olvidar', function () {
+  Puente.bdOlvidar().then(function () {
+    pintarBD('<div class="sm tenue mt">Desvinculada. La hoja sigue en tu Drive, solo deja de usarse.</div>');
+    UI.brindis('Hoja desvinculada');
+  });
+});
+
+UI.accion('bd-volcar', function () {
+  pintarBD('<div class="aviso mt">Preparando el volcado…</div>');
+  BD.volcar(function (seccion, i, total) {
+    pintarBD('<div class="aviso mt">Volcando <b>' + UI.esc(seccion) + '</b> · ' +
+      (i + 1) + ' de ' + total + '</div>');
+  }).then(function (r) {
+    var html = '';
+    if (r.errores.length) {
+      html += '<div class="aviso aviso-acento mt"><b>El volcado terminó con problemas:</b>' +
+        '<ul style="margin:8px 0 0;padding-left:18px">' +
+        r.errores.map(function (e) { return '<li>' + UI.esc(e) + '</li>'; }).join('') +
+        '</ul></div>';
+    } else {
+      html += '<div class="aviso aviso-ok mt"><b>Volcado completo.</b> ' +
+        r.secciones + ' secciones · ' + r.filas + ' filas.' +
+        (r.url ? '<div class="linea mt">' + enlaceHoja(r) + '</div>' : '') + '</div>';
+    }
+    /* Recortar contenido en silencio sería perder material sin que
+       nadie se entere, así que se enumera exactamente qué celda. */
+    if (r.recortados.length) {
+      html += '<div class="aviso aviso-alerta mt"><b>Se recortó contenido</b> por el límite de ' +
+        '50.000 caracteres por celda de Sheets. En la hoja está incompleto; en la app sigue entero:' +
+        '<ul style="margin:8px 0 0;padding-left:18px">' +
+        r.recortados.map(function (c) { return '<li>' + UI.esc(c) + '</li>'; }).join('') +
+        '</ul></div>';
+    }
+    pintarBD(html);
+    UI.brindis(r.errores.length ? 'Volcado con problemas' : 'Volcado completo · ' + r.filas + ' filas');
+  });
+});
+
 /* --- clave de Gemini --- */
 UI.accion('gemini-guardar', function () {
   var clave = (UI.$('#a-gemini-clave') || {}).value || '';

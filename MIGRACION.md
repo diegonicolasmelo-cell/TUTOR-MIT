@@ -40,7 +40,8 @@ node herramientas/construir.js
 ```
 
 Produce en `appsscript/`: `Index.html`, `Estilos.html`, `Datos.html`, `App.html`
-y `appsscript.json`. El archivo `Codigo.gs` está escrito a mano y no se regenera.
+y `appsscript.json`. Los archivos `Codigo.gs` y `BaseDatos.gs` están escritos a mano y no se
+regeneran: se copian tal cual.
 
 ### 2.2 Crear el proyecto
 
@@ -52,6 +53,7 @@ y `appsscript.json`. El archivo `Codigo.gs` está escrito a mano y no se regener
 | Archivo en el proyecto | Tipo | Contenido |
 |---|---|---|
 | `Codigo.gs` | Script | `appsscript/Codigo.gs` |
+| `BaseDatos.gs` | Script | `appsscript/BaseDatos.gs` |
 | `Index` | HTML | `appsscript/Index.html` |
 | `Estilos` | HTML | `appsscript/Estilos.html` |
 | `Datos` | HTML | `appsscript/Datos.html` |
@@ -144,6 +146,48 @@ google.script.run
 
 ---
 
+## 4 bis. La base de datos en Sheets
+
+`BaseDatos.gs` crea un libro con 13 pestañas y vuelca ahí todo: contenido, progreso e
+histórico. Se maneja desde `Ajustes → Base de datos en Sheets`.
+
+**No sustituye a `PropertiesService`, y no debe.** Sheets tarda cerca de un segundo por
+escritura y tiene cuotas por minuto: si calificar una tarjeta escribiera en la hoja, el repaso
+—que es el uso diario— sería inusable. El volcado ocurre cuando tú lo pides.
+
+Lo que sí aporta, y `PropertiesService` no puede dar:
+
+| | |
+|---|---|
+| **Respaldo legible** | El progreso vive como JSON troceado en propiedades, ilegible. Una hoja se abre y se entiende. |
+| **Contenido editable fuera de la app** | Corriges una tarjeta o un distractor en la hoja, sin tocar código. |
+| **Datos para graficar** | Sesiones y exámenes en columnas, con los números como números. |
+
+**Cómo se reparte la información.** Lo genuinamente tabular va en columnas; lo anidado —los
+bloques con HTML, el caso clínico, el ejercicio Feynman— viaja entero en una celda
+`detalle_json`. Aplanar eso en columnas sería inventarse una estructura relacional que el
+contenido no tiene, y perder información al volver. Las alternativas van **una fila por
+opción**, que es lo que permite corregir un distractor concreto.
+
+**Dos detalles que evitan corrupción silenciosa:**
+
+- Las columnas de contenido se fuerzan a **formato texto**. Sin eso, Sheets interpreta lo que
+  llega: una tarjeta cuyo frente sea «1-2-3» se convierte en fecha, un identificador pierde
+  los ceros de delante, y cualquier texto que empiece por `=` pasa a ser una fórmula. En las
+  hojas de histórico, en cambio, los números se dejan como números para poder graficarlos.
+- Sheets admite **50.000 caracteres por celda**. Si un `detalle_json` se pasa, la app recorta
+  y **te dice exactamente qué celda**, en vez de perder contenido en silencio. En la hoja
+  queda incompleto; en la app sigue entero.
+
+**El histórico se vuelca pero no se reimporta.** La fuente de verdad del progreso es la app.
+Dejar que una hoja lo sobrescriba abriría la puerta a perder repasos por una edición
+despistada.
+
+**Vincular una hoja existente** comprueba primero que tenga las pestañas `Meta` y `Temas`. Sin
+esa comprobación, vincular la hoja equivocada y volcar encima borraría datos ajenos.
+
+---
+
 ## 5. Comprobaciones tras la migración
 
 - [ ] La app carga y el panel de inicio muestra las métricas.
@@ -181,6 +225,14 @@ google.script.run
       advertencia hay que tomársela en serio: significa que no está anclado en tus documentos.
 - [ ] Exportar el progreso y comprobar con una búsqueda de texto que la clave de Gemini **no**
       aparece en el JSON.
+- [ ] `Ajustes → Base de datos en Sheets → Crear la hoja` genera un libro con 13 pestañas y
+      sus cabeceras.
+- [ ] `Volcar ahora` termina sin errores. Con el temario de fábrica son unas 590 filas.
+- [ ] En la pestaña `Tarjetas`, una tarjeta cuyo texto empiece por `=` o parezca una fecha se
+      ve tal cual, sin convertirse en fórmula ni en fecha.
+- [ ] En `Sesiones`, la columna `porcentaje` se puede sumar y graficar (es número, no texto).
+- [ ] Vincular una hoja de cálculo cualquiera **falla** con un mensaje claro en vez de volcar
+      encima.
 
 ---
 

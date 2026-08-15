@@ -644,6 +644,29 @@ UI.registrar('ajustes', {
     }
     html += '</div>';
 
+    /* --- base de datos en Sheets --- */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Base de datos en Sheets</h3></div>' +
+      '<p class="sm tenue">Un respaldo que <b>se puede leer</b>: el progreso vive en tu cuenta como ' +
+      'JSON fragmentado, ilegible para un humano. Esta hoja lo abre en columnas, deja corregir ' +
+      'tarjetas y alternativas fuera de la app, y te da tus sesiones y exámenes listos para graficar.</p>' +
+      '<div class="aviso mt"><b>No sustituye al almacén.</b> Sheets es lento para el uso diario ' +
+      '—cada escritura es cerca de un segundo, con cuotas— y calificar tarjetas contra una hoja ' +
+      'haría el repaso inusable. Se vuelca cuando tú lo pidas, no en cada cambio.</div>';
+
+    if (!Puente.disponible()) {
+      html += '<div class="aviso aviso-alerta mt">' + UI.esc(Puente.motivo) + '</div>';
+    } else {
+      html += '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="bd-crear">Crear la hoja</button>' +
+        '<button class="btn" data-accion="bd-volcar">Volcar ahora</button>' +
+        '<button class="btn btn-fantasma" data-accion="bd-estado">Ver estado</button></div>' +
+        '<div class="linea mt">' +
+        '<input id="a-bd-url" class="crece" placeholder="…o pega el enlace de una hoja ya creada">' +
+        '<button class="btn btn-s btn-fantasma" data-accion="bd-vincular">Vincular</button></div>' +
+        '<div id="a-bd-estado"></div>';
+    }
+    html += '</div>';
+
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Áreas del conocimiento</h3>' +
       '<div class="der"><span class="etiq etiq-info">' + Estado.areasActivas().length + ' activas</span></div></div>' +
       '<p class="sm tenue">Activa o pausa áreas completas para concentrar el plan y el mazo de tarjetas en lo que toca ahora.</p>' +

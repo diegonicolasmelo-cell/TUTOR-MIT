@@ -48,6 +48,7 @@ const SCRIPTS_APP = [
   'examen.js',
   'diapositivas.js',
   'biblioteca.js',
+  'basedatos.js',
   'tarjetas.js',
   'app.js'
 ];
@@ -198,6 +199,7 @@ console.log('  appsscript/Estilos.html  ' + kb(css));
 console.log('  appsscript/Datos.html    ' + kb(jsDatos) + '  (temario)');
 console.log('  appsscript/App.html      ' + kb(jsApp) + '  (lógica)');
 console.log('  appsscript/Codigo.gs     backend (escrito a mano, no se regenera)');
+console.log('  appsscript/BaseDatos.gs  base de datos en Sheets (idem)');
 console.log('  appsscript/appsscript.json');
 const bloqueAreas = (jsDatos.split('TUTOR.AREAS = [')[1] || '').split('\n];')[0];
 console.log('\nÁreas: ' + (bloqueAreas.match(/^\s*id: '/gm) || []).length +

@@ -217,6 +217,7 @@ assets/
   almacen.js                capa de persistencia intercambiable + reglas de negocio
   ui.js                     utilidades, enrutador y cronómetro
   puente.js                 único punto que llama al servidor: Docs, Drive y Gemini
+  basedatos.js              arma las filas del volcado a Google Sheets
   asistente.js              Minerva: motor de reglas y panel
   taller.js                 esquema, generador de prompt, validador, saneado e importador
   vistas.js                 inicio, áreas, temario, ficha, plan, rendimiento, prompt, ajustes
