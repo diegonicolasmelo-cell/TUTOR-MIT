@@ -33,6 +33,13 @@ var BD = (function () {
     return isFinite(n) ? n : 0;
   }
 
+  /* Un año que no lo es se deja en blanco, no en cero: un 0 en la
+     columna ordenaría por delante de 1950 y mentiría al consultar. */
+  function anioValido(v) {
+    var n = parseInt(v, 10);
+    return (isFinite(n) && n > 1000 && n < 3000) ? n : '';
+  }
+
   function lista(v) {
     return Array.isArray(v) ? v.join(', ') : texto(v);
   }
@@ -72,7 +79,7 @@ var BD = (function () {
     Temas: function () {
       return TUTOR.TEMAS.map(function (t) {
         return [t.id, t.modulo, texto(TUTOR.areaDeTema(t.id)), t.nombre,
-          t.alto ? 'sí' : 'no', texto(t.minutos), texto(t.ideaCentral),
+          t.alto ? 'sí' : 'no', numero(t.minutos), texto(t.ideaCentral),
           texto(t.perla), texto(t.fuentes),
           t.propio ? 'propio' : 'de fábrica',
           t.propio ? (t.verificado ? 'sí' : 'no') : '—',
@@ -84,7 +91,7 @@ var BD = (function () {
       var filas = [];
       TUTOR.TEMAS.forEach(function (t) {
         (t.tarjetas || []).forEach(function (c, i) {
-          filas.push([t.id, String(i), texto(c.f), texto(c.d)]);
+          filas.push([t.id, i, texto(c.f), texto(c.d)]);
         });
       });
       return filas;
@@ -98,7 +105,7 @@ var BD = (function () {
       TUTOR.TEMAS.forEach(function (t) {
         TUTOR.mcqDe(t.id).forEach(function (q) {
           (q.o || []).forEach(function (op) {
-            filas.push([t.id, texto(q.n), texto(q.q), texto(op.t),
+            filas.push([t.id, numero(q.n), texto(q.q), texto(op.t),
               op.ok ? 'sí' : '', texto(op.r)]);
           });
         });
@@ -115,7 +122,7 @@ var BD = (function () {
 
     Fuentes: function () {
       return Estado.fuentes().map(function (f) {
-        return [f.id, texto(f.titulo), texto(f.autor), texto(f.anio),
+        return [f.id, texto(f.titulo), texto(f.autor), anioValido(f.anio),
           texto(f.tipo), texto(f.enlace), lista(f.temas)];
       });
     },

@@ -2058,9 +2058,15 @@ UI.registrar('ajustes', {
 
     /* --- base de datos en Sheets --- */
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Base de datos en Sheets</h3></div>' +
-      '<p class="sm tenue">Un respaldo que <b>se puede leer</b>: el progreso vive en tu cuenta como ' +
-      'JSON fragmentado, ilegible para un humano. Esta hoja lo abre en columnas, deja corregir ' +
-      'tarjetas y alternativas fuera de la app, y te da tus sesiones y exámenes listos para graficar.</p>' +
+      '<p class="sm tenue">Un respaldo que <b>se puede leer y consultar</b>: el progreso vive en tu ' +
+      'cuenta como JSON fragmentado, ilegible para un humano. Esta hoja lo abre en columnas, deja ' +
+      'corregir tarjetas y alternativas fuera de la app, y te da tus sesiones y exámenes listos ' +
+      'para graficar.</p>' +
+      '<p class="sm tenue">La pestaña <b>Consultas</b> trae seis preguntas ya escritas y resueltas ' +
+      '—qué llevas peor, dónde se va tu tiempo, qué brechas repites, qué tarjetas se te olvidan, ' +
+      'cómo evolucionan tus exámenes y qué tienes vencido— y se recalculan solas en cada volcado. ' +
+      'Están hechas con <code>QUERY()</code>, que es SQL sobre el rango, así que puedes copiar una ' +
+      'y cambiarle la condición para preguntar otra cosa.</p>' +
       '<div class="aviso mt"><b>No sustituye al almacén.</b> Sheets es lento para el uso diario ' +
       '—cada escritura es cerca de un segundo, con cuotas— y calificar tarjetas contra una hoja ' +
       'haría el repaso inusable. Se vuelca cuando tú lo pidas, no en cada cambio.</div>';
@@ -4495,6 +4501,13 @@ var BD = (function () {
     return isFinite(n) ? n : 0;
   }
 
+  /* Un año que no lo es se deja en blanco, no en cero: un 0 en la
+     columna ordenaría por delante de 1950 y mentiría al consultar. */
+  function anioValido(v) {
+    var n = parseInt(v, 10);
+    return (isFinite(n) && n > 1000 && n < 3000) ? n : '';
+  }
+
   function lista(v) {
     return Array.isArray(v) ? v.join(', ') : texto(v);
   }
@@ -4534,7 +4547,7 @@ var BD = (function () {
     Temas: function () {
       return TUTOR.TEMAS.map(function (t) {
         return [t.id, t.modulo, texto(TUTOR.areaDeTema(t.id)), t.nombre,
-          t.alto ? 'sí' : 'no', texto(t.minutos), texto(t.ideaCentral),
+          t.alto ? 'sí' : 'no', numero(t.minutos), texto(t.ideaCentral),
           texto(t.perla), texto(t.fuentes),
           t.propio ? 'propio' : 'de fábrica',
           t.propio ? (t.verificado ? 'sí' : 'no') : '—',
@@ -4546,7 +4559,7 @@ var BD = (function () {
       var filas = [];
       TUTOR.TEMAS.forEach(function (t) {
         (t.tarjetas || []).forEach(function (c, i) {
-          filas.push([t.id, String(i), texto(c.f), texto(c.d)]);
+          filas.push([t.id, i, texto(c.f), texto(c.d)]);
         });
       });
       return filas;
@@ -4560,7 +4573,7 @@ var BD = (function () {
       TUTOR.TEMAS.forEach(function (t) {
         TUTOR.mcqDe(t.id).forEach(function (q) {
           (q.o || []).forEach(function (op) {
-            filas.push([t.id, texto(q.n), texto(q.q), texto(op.t),
+            filas.push([t.id, numero(q.n), texto(q.q), texto(op.t),
               op.ok ? 'sí' : '', texto(op.r)]);
           });
         });
@@ -4577,7 +4590,7 @@ var BD = (function () {
 
     Fuentes: function () {
       return Estado.fuentes().map(function (f) {
-        return [f.id, texto(f.titulo), texto(f.autor), texto(f.anio),
+        return [f.id, texto(f.titulo), texto(f.autor), anioValido(f.anio),
           texto(f.tipo), texto(f.enlace), lista(f.temas)];
       });
     },
@@ -5171,7 +5184,7 @@ UI.accion('bd-estado', function () {
 });
 
 UI.accion('bd-crear', function () {
-  pintarBD('<div class="sm tenue mt">Creando la hoja y sus 13 pestañas…</div>');
+  pintarBD('<div class="sm tenue mt">Creando la hoja, sus pestañas y las consultas preparadas…</div>');
   Puente.bdCrear('Tutor MIT · base de datos').then(function (r) {
     if (!r.ok) { pintarBD('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
     pintarBD('<div class="aviso aviso-ok mt"><b>Hoja creada:</b> ' + UI.esc(r.titulo) +

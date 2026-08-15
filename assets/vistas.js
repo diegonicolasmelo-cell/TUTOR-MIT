@@ -646,9 +646,15 @@ UI.registrar('ajustes', {
 
     /* --- base de datos en Sheets --- */
     html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Base de datos en Sheets</h3></div>' +
-      '<p class="sm tenue">Un respaldo que <b>se puede leer</b>: el progreso vive en tu cuenta como ' +
-      'JSON fragmentado, ilegible para un humano. Esta hoja lo abre en columnas, deja corregir ' +
-      'tarjetas y alternativas fuera de la app, y te da tus sesiones y exámenes listos para graficar.</p>' +
+      '<p class="sm tenue">Un respaldo que <b>se puede leer y consultar</b>: el progreso vive en tu ' +
+      'cuenta como JSON fragmentado, ilegible para un humano. Esta hoja lo abre en columnas, deja ' +
+      'corregir tarjetas y alternativas fuera de la app, y te da tus sesiones y exámenes listos ' +
+      'para graficar.</p>' +
+      '<p class="sm tenue">La pestaña <b>Consultas</b> trae seis preguntas ya escritas y resueltas ' +
+      '—qué llevas peor, dónde se va tu tiempo, qué brechas repites, qué tarjetas se te olvidan, ' +
+      'cómo evolucionan tus exámenes y qué tienes vencido— y se recalculan solas en cada volcado. ' +
+      'Están hechas con <code>QUERY()</code>, que es SQL sobre el rango, así que puedes copiar una ' +
+      'y cambiarle la condición para preguntar otra cosa.</p>' +
       '<div class="aviso mt"><b>No sustituye al almacén.</b> Sheets es lento para el uso diario ' +
       '—cada escritura es cerca de un segundo, con cuotas— y calificar tarjetas contra una hoja ' +
       'haría el repaso inusable. Se vuelca cuando tú lo pidas, no en cada cambio.</div>';

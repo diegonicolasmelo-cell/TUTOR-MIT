@@ -313,7 +313,7 @@ UI.accion('bd-estado', function () {
 });
 
 UI.accion('bd-crear', function () {
-  pintarBD('<div class="sm tenue mt">Creando la hoja y sus 13 pestañas…</div>');
+  pintarBD('<div class="sm tenue mt">Creando la hoja, sus pestañas y las consultas preparadas…</div>');
   Puente.bdCrear('Tutor MIT · base de datos').then(function (r) {
     if (!r.ok) { pintarBD('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
     pintarBD('<div class="aviso aviso-ok mt"><b>Hoja creada:</b> ' + UI.esc(r.titulo) +

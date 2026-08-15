@@ -64,18 +64,18 @@ var ESQUEMA_BD = {
     grupo: 'contenido',
     columnas: ['id', 'modulo', 'area', 'nombre', 'alto', 'minutos',
       'ideaCentral', 'perla', 'fuentes', 'origen', 'verificado', 'detalle_json'],
-    formatos: ['texto', 'texto', 'texto', 'texto', 'texto', 'texto',
+    formatos: ['texto', 'texto', 'texto', 'texto', 'texto', 'numero',
       'texto', 'texto', 'texto', 'texto', 'texto', 'texto']
   },
   Tarjetas: {
     grupo: 'contenido',
     columnas: ['tema', 'indice', 'frente', 'dorso'],
-    formatos: ['texto', 'texto', 'texto', 'texto']
+    formatos: ['texto', 'numero', 'texto', 'texto']
   },
   Alternativas: {
     grupo: 'contenido',
     columnas: ['tema', 'nivel', 'pregunta', 'opcion', 'correcta', 'razon'],
-    formatos: ['texto', 'texto', 'texto', 'texto', 'texto', 'texto']
+    formatos: ['texto', 'numero', 'texto', 'texto', 'texto', 'texto']
   },
   Progreso: {
     grupo: 'historico',
@@ -110,17 +110,80 @@ var ESQUEMA_BD = {
   Fuentes: {
     grupo: 'contenido',
     columnas: ['id', 'titulo', 'autores', 'anio', 'tipo', 'enlace', 'temas'],
-    formatos: ['texto', 'texto', 'texto', 'texto', 'texto', 'texto', 'texto']
+    formatos: ['texto', 'texto', 'texto', 'numero', 'texto', 'texto', 'texto']
   },
   Meta: {
     grupo: 'meta',
     columnas: ['clave', 'valor'],
     formatos: ['texto', 'texto']
+  },
+  Consultas: {
+    grupo: 'consultas',
+    columnas: [],
+    formatos: []
   }
 };
 
-var ORDEN_BD = ['Meta', 'Areas', 'Modulos', 'Temas', 'Tarjetas', 'Alternativas',
+var ORDEN_BD = ['Consultas', 'Meta', 'Areas', 'Modulos', 'Temas', 'Tarjetas', 'Alternativas',
   'Notas', 'Fuentes', 'Progreso', 'Repaso', 'Sesiones', 'Examenes', 'Brechas'];
+
+/* ------------------------------------------------------------
+   CONSULTAS PREPARADAS
+   ------------------------------------------------------------
+   Tener los datos en columnas no es lo mismo que poder
+   preguntarles nada: hay que saber escribir la consulta. Esta
+   pestaña deja las preguntas ya escritas y resueltas, y se
+   recalculan solas en cada volcado.
+
+   Se usa QUERY(), que es lenguaje SQL de verdad sobre un rango.
+   Las fórmulas se escriben con COMA como separador aunque tu
+   Sheets esté en español: Apps Script las recibe en formato
+   estadounidense y Sheets las muestra ya traducidas.
+
+   Cada bloque ocupa 3 columnas y se separan de 4 en 4 para que
+   ninguno pise al de al lado al crecer.
+   ------------------------------------------------------------ */
+var CONSULTAS = [
+  { titulo: 'Temas que peor llevas',
+    ayuda: 'dominio de 0 a 100, de menor a mayor',
+    formula: '=IFERROR(QUERY(Progreso!A2:G,"select A, B where A is not null order by B asc limit 15",0),"aún sin datos")' },
+
+  { titulo: 'Dónde se va tu tiempo',
+    ayuda: 'minutos y nº de sesiones por tema',
+    formula: '=IFERROR(QUERY(Sesiones!A2:G,"select B, sum(D), count(A) where B is not null group by B order by sum(D) desc limit 15",0),"aún sin datos")' },
+
+  { titulo: 'Brechas más repetidas',
+    ayuda: 'lo que fallas una y otra vez',
+    formula: '=IFERROR(QUERY(Brechas!A2:C,"select B, count(C) where B is not null group by B order by count(C) desc limit 15",0),"aún sin datos")' },
+
+  { titulo: 'Tarjetas que más se te olvidan',
+    ayuda: 'lapsos = veces que la fallaste tras haberla sabido',
+    formula: '=IFERROR(QUERY(Repaso!A2:G,"select A, B, F where F > 0 order by F desc limit 15",0),"aún sin datos")' },
+
+  { titulo: 'Evolución de tus exámenes',
+    ayuda: 'fecha y porcentaje, del más reciente al más antiguo',
+    formula: '=IFERROR(QUERY(Examenes!A2:E,"select A, B where A is not null order by A desc limit 15",0),"aún sin datos")' },
+
+  { titulo: 'Qué tienes vencido hoy',
+    ayuda: 'tarjetas por tema con fecha de repaso ya pasada',
+    formula: '=IFERROR(QUERY(Repaso!A2:G,"select A, count(B) where G <= \'"&TEXT(TODAY(),"yyyy-mm-dd")&"\' group by A order by count(B) desc limit 15",0),"nada vencido")' }
+];
+
+function prepararConsultas_(hoja) {
+  var anchoNecesario = 4 * CONSULTAS.length;
+  if (hoja.getMaxColumns() < anchoNecesario) {
+    hoja.insertColumnsAfter(hoja.getMaxColumns(), anchoNecesario - hoja.getMaxColumns());
+  }
+  CONSULTAS.forEach(function (c, i) {
+    var col = 1 + i * 4;
+    hoja.getRange(1, col).setValue(c.titulo).setFontWeight('bold').setBackground('#eef2f7');
+    hoja.getRange(2, col).setValue(c.ayuda).setFontStyle('italic').setFontSize(9);
+    /* setFormula, no setValue: con setValue la cadena se guardaría
+       como texto y se vería la fórmula en vez del resultado. */
+    hoja.getRange(3, col).setFormula(c.formula);
+  });
+  hoja.setFrozenRows(2);
+}
 
 /* Límite duro de Sheets. Un tema con muchos bloques puede
    acercarse, y truncar en silencio sería perder contenido sin
@@ -140,7 +203,8 @@ function crearBaseDeDatos(titulo) {
       var def = ESQUEMA_BD[seccion];
       var hoja = (i === 0) ? libro.getSheets()[0] : libro.insertSheet();
       hoja.setName(seccion);
-      prepararHoja_(hoja, def);
+      if (def.grupo === 'consultas') prepararConsultas_(hoja);
+      else prepararHoja_(hoja, def);
     });
 
     var props = PropertiesService.getUserProperties();
@@ -239,6 +303,12 @@ function libroBD_() {
 function volcarSeccion(nombre, filas) {
   var def = ESQUEMA_BD[nombre];
   if (!def) return { ok: false, error: 'Sección desconocida: ' + nombre };
+  if (def.grupo === 'consultas') {
+    /* «Consultas» son fórmulas, no datos: escribir filas encima
+       las borraría y la pestaña dejaría de responder nada. */
+    return { ok: false, error: 'La pestaña «Consultas» son fórmulas y se recalculan solas; ' +
+      'no se vuelcan datos en ella.' };
+  }
 
   var libro = libroBD_();
   if (!libro) return { ok: false, error: 'No hay ninguna hoja vinculada. Créala primero.' };

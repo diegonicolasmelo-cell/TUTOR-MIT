@@ -186,6 +186,39 @@ despistada.
 **Vincular una hoja existente** comprueba primero que tenga las pestañas `Meta` y `Temas`. Sin
 esa comprobación, vincular la hoja equivocada y volcar encima borraría datos ajenos.
 
+### Consultar la base de datos
+
+La pestaña **`Consultas`** trae seis preguntas ya escritas y resueltas, que se recalculan
+solas en cada volcado:
+
+| Pregunta | De dónde sale |
+|---|---|
+| Temas que peor llevas | `Progreso`, ordenado por dominio ascendente |
+| Dónde se va tu tiempo | `Sesiones`, suma de minutos agrupada por tema |
+| Brechas más repetidas | `Brechas`, contadas por tema |
+| Tarjetas que más se te olvidan | `Repaso`, ordenado por lapsos |
+| Evolución de tus exámenes | `Examenes`, del más reciente al más antiguo |
+| Qué tienes vencido hoy | `Repaso`, comparando `vence` con `TODAY()` |
+
+Están hechas con `QUERY()`, que es **lenguaje SQL de verdad sobre un rango**. Para preguntar
+otra cosa se copia una y se le cambia la condición:
+
+```
+=QUERY(Progreso!A2:G, "select A, B where B < 40 order by B asc", 0)
+```
+
+Dos detalles que hacen que esto funcione y no son evidentes:
+
+- **Las columnas numéricas están declaradas como número**, no como texto: `Temas.minutos`,
+  `Tarjetas.indice`, `Alternativas.nivel` y `Fuentes.anio`. Si fueran texto, `where minutos > 20`
+  compararía cadenas, y como texto `"9" > "20"` es cierto. La consulta devolvería basura sin
+  avisar de nada.
+- **Las fórmulas se escriben con coma** aunque tu Sheets esté en español. Apps Script las recibe
+  en formato estadounidense y Sheets las muestra ya traducidas a `;` al abrirlas.
+
+`Consultas` son fórmulas, no datos: el volcado se niega a escribir en esa pestaña, porque
+hacerlo las borraría y dejaría de responder nada.
+
 ---
 
 ## 5. Comprobaciones tras la migración
@@ -231,6 +264,11 @@ esa comprobación, vincular la hoja equivocada y volcar encima borraría datos a
 - [ ] En la pestaña `Tarjetas`, una tarjeta cuyo texto empiece por `=` o parezca una fecha se
       ve tal cual, sin convertirse en fórmula ni en fecha.
 - [ ] En `Sesiones`, la columna `porcentaje` se puede sumar y graficar (es número, no texto).
+- [ ] La pestaña `Consultas` muestra resultados, no `#N/A` ni el texto de la fórmula. Con la
+      base recién creada dirá «aún sin datos», que es lo correcto.
+- [ ] Copiar una consulta y cambiarle la condición devuelve lo esperado. Prueba
+      `where minutos > 20` sobre `Temas`: si te salen temas de 9 minutos, las columnas
+      numéricas no se aplicaron y hay que revisar el formato de la hoja.
 - [ ] Vincular una hoja de cálculo cualquiera **falla** con un mensaje claro en vez de volcar
       encima.
 
