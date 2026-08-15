@@ -1151,9 +1151,80 @@ TUTOR.NIVELES = {
    Pensados para el perfil de Diego: profesional de UCI, familia,
    poco tiempo, bases sólidas y pacientes reales a mano.
    ------------------------------------------------------------ */
+/* ------------------------------------------------------------
+   TEMARIO DE FÁBRICA: QUITARLO Y DEVOLVERLO
+   ------------------------------------------------------------
+   Los 32 temas de fisiología no están en los datos del usuario:
+   están en el código, en los archivos datos-*.js. Por eso
+   «Reiniciar todo» no los hacía desaparecer, y quien quiera usar
+   la app para otra materia se los encontraba de vuelta en cada
+   arranque.
+
+   La solución no es borrar archivos —eso sería tocar código, no
+   usar la app— sino apartarlos del registro en memoria. Se
+   guarda una copia al arrancar, antes de incorporar el contenido
+   propio, de modo que la decisión es reversible: si mañana los
+   quiere de vuelta, siguen intactos en el paquete.
+   ------------------------------------------------------------ */
+TUTOR.BASE = null;
+
+TUTOR.congelarBase = function () {
+  if (TUTOR.BASE) return;          /* solo la primera vez */
+  TUTOR.BASE = {
+    areas: TUTOR.AREAS.slice(),
+    modulos: TUTOR.MODULOS.slice(),
+    temas: TUTOR.TEMAS.slice(),
+    mcq: JSON.parse(JSON.stringify(TUTOR.MCQ || {}))
+  };
+};
+
+/* Qué es «de fábrica» se decide por la copia congelada, no por
+   la marca «propio» de cada objeto. Es más fiable: la marca
+   depende de que el importador la ponga bien en las tres
+   entidades, y el contenido que ya esté guardado de antes no se
+   puede corregir a posteriori. La copia, en cambio, es por
+   definición exactamente lo que traía la app. */
+function enBase_(lista, x) {
+  for (var i = 0; i < lista.length; i++) if (lista[i].id === x.id) return true;
+  return false;
+}
+
+TUTOR.hayBase = function () {
+  if (!TUTOR.BASE) return true;
+  return TUTOR.TEMAS.some(function (t) { return enBase_(TUTOR.BASE.temas, t); });
+};
+
+TUTOR.quitarBase = function () {
+  if (!TUTOR.BASE) return;
+  var b = TUTOR.BASE;
+  TUTOR.AREAS = TUTOR.AREAS.filter(function (a) { return !enBase_(b.areas, a); });
+  TUTOR.MODULOS = TUTOR.MODULOS.filter(function (m) { return !enBase_(b.modulos, m); });
+  TUTOR.TEMAS = TUTOR.TEMAS.filter(function (t) { return !enBase_(b.temas, t); });
+  /* Las alternativas de fábrica se registran aparte, en un mapa
+     por tema: hay que retirarlas también o el examen seguiría
+     preguntando por temas que ya no existen. */
+  var vivos = {};
+  TUTOR.TEMAS.forEach(function (t) { vivos[t.id] = true; });
+  Object.keys(TUTOR.MCQ).forEach(function (id) {
+    if (!vivos[id]) delete TUTOR.MCQ[id];
+  });
+};
+
+TUTOR.restaurarBase = function () {
+  if (!TUTOR.BASE) return;
+  var b = TUTOR.BASE;
+  b.areas.forEach(function (a) { if (!TUTOR.area(a.id)) TUTOR.AREAS.push(a); });
+  b.modulos.forEach(function (m) { if (!TUTOR.modulo(m.id)) TUTOR.MODULOS.push(m); });
+  b.temas.forEach(function (t) { if (!TUTOR.tema(t.id)) TUTOR.TEMAS.push(t); });
+  Object.keys(b.mcq).forEach(function (id) {
+    if (!TUTOR.MCQ[id]) TUTOR.MCQ[id] = b.mcq[id];
+  });
+};
+
 TUTOR.AJUSTES_DEFECTO = {
   nombre: 'Diego',
   tema: 'auto',
+  temarioBase: true,
   areasActivas: TUTOR.AREAS.map(function (a) { return a.id; }),
   asistente: true,
   minutosPorDia: { 0: 30, 1: 25, 2: 25, 3: 25, 4: 25, 5: 20, 6: 45 }, // 0 = domingo
@@ -6658,7 +6729,11 @@ var Estado = (function () {
     sugerencia: function () {
       var hoy = hoyISO();
       var bloques = Estado.planDe(hoy).filter(function (b) {
-        return !b.hecho && b.tipo === 'estudio';
+        /* El plan se guarda con identificadores de tema. Si el
+           temario cambió —al quitar el de fábrica, por ejemplo—
+           quedan bloques apuntando a temas que ya no existen, y
+           sugerirlos daría un tema nulo. */
+        return !b.hecho && b.tipo === 'estudio' && !!TUTOR.tema(b.tema);
       });
       if (bloques.length) {
         return { tema: bloques[0].tema, minutos: bloques[0].minutos, origen: 'plan' };
@@ -6668,6 +6743,10 @@ var Estado = (function () {
         return Estado.dominio(a.id) - Estado.dominio(b.id);
       });
       if (!candidatos.length) candidatos = TUTOR.TEMAS.slice();
+      /* Sin ningún tema no hay nada que sugerir. Ocurre de verdad:
+         al quitar el temario de fábrica para usar la app con otra
+         materia, el temario queda vacío hasta el primer import. */
+      if (!candidatos.length) return null;
       return {
         tema: candidatos[0].id,
         minutos: Math.min(Estado.minutosDisponibles(hoy) || 25, 30),
@@ -7438,7 +7517,8 @@ var Minerva = (function () {
       var d = Estado.datos();
       if (d.sesiones.length > 0) return null;
       var s = Estado.sugerencia();
-      var t = TUTOR.tema(s.tema);
+      var t = s ? TUTOR.tema(s.tema) : null;
+      if (!t) return null;
       return {
         id: 'primera',
         prioridad: 100,
@@ -7559,10 +7639,14 @@ UI.registrar('inicio', {
   },
   sub: function () {
     var s = Estado.sugerencia();
-    var t = TUTOR.tema(s.tema);
+    var t = s ? TUTOR.tema(s.tema) : null;
+    if (!t) return 'Sin temario todavía · créalo en el Taller';
     return 'Siguiente paso sugerido: <b>' + UI.esc(t.nombre) + '</b> · ' + s.minutos + ' min';
   },
   acciones: function () {
+    if (!Estado.sugerencia()) {
+      return '<button class="btn btn-primario" data-accion="navegar" data-ruta="taller">Crear contenido</button>';
+    }
     return '<button class="btn btn-primario" data-accion="empezar-sugerido">▶ Empezar sesión</button>';
   },
 
@@ -7575,9 +7659,25 @@ UI.registrar('inicio', {
     var racha = Estado.datos().racha;
     var brechas = Estado.brechasAbiertas();
     var s = Estado.sugerencia();
-    var temaSug = TUTOR.tema(s.tema);
+    var temaSug = s ? TUTOR.tema(s.tema) : null;
 
     var html = '';
+
+    /* La app vacía es un estado legítimo, no un error: se llega a
+       él a propósito al quitar el temario para usar otra materia.
+       Conviene decir qué hacer, no dejar un panel en blanco. */
+    if (!TUTOR.TEMAS.length) {
+      return '<div class="tarjeta"><div class="tarjeta-cab"><h3>Temario vacío</h3></div>' +
+        '<p>No hay ningún tema todavía. Es lo esperable si acabas de quitar el temario ' +
+        'de fisiología para usar la app con otra materia.</p>' +
+        '<p class="sm tenue">El <b>Taller</b> crea temas a partir de tus propios apuntes y ' +
+        'papers: defines qué quieres, te da un prompt, y lo que te devuelva la IA se valida ' +
+        'antes de entrar. Si prefieres el temario de fisiología de vuelta, está en Ajustes.</p>' +
+        '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="navegar" data-ruta="taller">Ir al Taller</button>' +
+        '<button class="btn btn-fantasma" data-accion="navegar" data-ruta="ajustes">Ajustes</button>' +
+        '</div></div>';
+    }
 
     /* --- consejo principal de Minerva --- */
     var consejo = (Estado.ajustes().asistente && typeof Minerva !== 'undefined') ? Minerva.principal() : null;
@@ -7618,9 +7718,11 @@ UI.registrar('inicio', {
           m + ' min<small>' + descripcionTiempo(m) + '</small></button>';
       }).join('') +
       '</div>' +
-      '<div class="aviso"><b>Sugerido ahora:</b> ' + UI.esc(temaSug.nombre) +
-      (temaSug.alto ? ' <span class="etiq etiq-fuego">🔥 Alto rendimiento</span>' : '') +
-      ' — ' + (s.origen === 'plan' ? 'viene de tu plan de la semana' : 'menor dominio con mayor rentabilidad') + '.</div>' +
+      (temaSug
+        ? '<div class="aviso"><b>Sugerido ahora:</b> ' + UI.esc(temaSug.nombre) +
+          (temaSug.alto ? ' <span class="etiq etiq-fuego">🔥 Alto rendimiento</span>' : '') +
+          ' — ' + (s.origen === 'plan' ? 'viene de tu plan de la semana' : 'menor dominio con mayor rentabilidad') + '.</div>'
+        : '<div class="aviso">Todas las áreas están pausadas. Actívalas en <b>Áreas</b> para que la app pueda sugerirte algo.</div>') +
       '</div>';
 
     /* --- dos columnas --- */
@@ -8250,7 +8352,30 @@ UI.registrar('ajustes', {
       '<div class="linea">' +
       '<button class="btn" data-accion="exportar">Exportar progreso</button>' +
       '<button class="btn" data-accion="importar">Importar</button>' +
-      '<button class="btn btn-acento" data-accion="reiniciar">Reiniciar todo</button>' +
+      '<button class="btn btn-acento" data-accion="reiniciar">Borrar mi progreso</button>' +
+      '</div>' +
+      '<p class="sm tenue mt"><b>Borrar mi progreso</b> vacía tu historial y tu contenido propio, ' +
+      'pero el temario de fisiología vuelve a aparecer: no está en tus datos, está en el código ' +
+      'de la app. Para quitarlo, usa lo de abajo.</p></div>';
+
+    /* --- cambiar de materia --- */
+    var base = TUTOR.hayBase();
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Usar la app para otra materia</h3>' +
+      '<div class="der"><span class="etiq' + (base ? '' : ' etiq-alerta') + '">' +
+      TUTOR.TEMAS.length + ' temas ahora</span></div></div>' +
+      '<p class="sm tenue">La app viene con 32 temas de fisiología porque hay que venir con algo, ' +
+      'pero el motor no sabe de medicina: sirve igual para cualquier materia que se estudie ' +
+      'comprendiendo y recordando. Si vas a usarla para otra cosa, quita el temario de fábrica ' +
+      'y crea el tuyo en el Taller.</p>' +
+      '<label class="campo"><span>Temario de fisiología</span>' +
+      '<div class="conmutador" style="display:inline-flex">' +
+      '<button data-accion="temario-base" data-valor="1" class="' + (base ? 'sel' : '') + '">Incluido</button>' +
+      '<button data-accion="temario-base" data-valor="0" class="' + (!base ? 'sel' : '') + '">Quitado</button>' +
+      '</div>' +
+      '<span class="sm tenue">Reversible: los temas siguen en el paquete de la app y vuelven ' +
+      'cuando quieras, con tu progreso sobre ellos intacto.</span></label>' +
+      '<div class="linea mt fin">' +
+      '<button class="btn btn-acento" data-accion="empezar-de-cero">Empezar de cero del todo</button>' +
       '</div></div>';
 
     return html;
@@ -8619,7 +8744,7 @@ var Taller = (function () {
         icono: limpiarTexto(datos.area.icono).slice(0, 4) || '📗',
         resumen: limpiarTexto(datos.area.resumen) || 'Área creada desde el Taller.',
         lema: limpiarTexto(datos.area.lema) || '',
-        propia: true
+        propio: true
       };
       if (!datos.area.nombre) avisos.push('El área no traía nombre: se usó el identificador.');
     }
@@ -9532,8 +9657,13 @@ UI.registrar('preparar', {
   sub: 'Tres preguntas antes de empezar, como haría un tutor',
   angosto: true,
   render: function (p) {
-    var temaSel = p.tema || Estado.sugerencia().tema;
-    var t = TUTOR.tema(temaSel);
+    var sug = Estado.sugerencia();
+    var temaSel = p.tema || (sug ? sug.tema : null);
+    var t = temaSel ? TUTOR.tema(temaSel) : null;
+    if (!t) {
+      return '<div class="vacio"><span class="emoji">🦉</span>No hay ningún tema que estudiar.<br>' +
+        '<span class="sm">Créalo en el Taller o devuelve el temario de fisiología desde Ajustes.</span></div>';
+    }
 
     var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>1 · ¿Qué tema?</h3></div>' +
       '<select id="s-tema">' +
@@ -11171,12 +11301,14 @@ UI.accion('ir-tarjetas', function () {
 /* --- arranque de sesiones --- */
 UI.accion('empezar-sugerido', function () {
   var s = Estado.sugerencia();
+  if (!s) { UI.brindis('No hay ningún tema todavía. Créalo en el Taller.'); return; }
   UI.ir('preparar', { tema: s.tema });
 });
 
 UI.accion('arranque-rapido', function (d) {
   var min = parseInt(d.min, 10);
   var s = Estado.sugerencia();
+  if (!s) { UI.brindis('No hay ningún tema todavía. Créalo en el Taller.'); return; }
   var modo = min <= 10 ? 'repaso' : min <= 20 ? 'comprender' : min <= 30 ? 'comprender' : min <= 45 ? 'intensivo' : 'profundizar';
   Sesion.iniciar(s.tema, modo, min);
 });
@@ -11289,6 +11421,91 @@ UI.accion('guardar-srs', function () {
   });
   UI.actualizarGlobos();
   UI.brindis('Preferencias de repaso guardadas');
+});
+
+/* ------------------------------------------------------------
+   EMPEZAR DE CERO
+   ------------------------------------------------------------ */
+
+/* Si se quita el temario de fábrica, las áreas activas guardadas
+   apuntarían a áreas que ya no existen y la app se vería vacía
+   sin explicar por qué. Y al revés: al devolverlo, las áreas
+   recuperadas deben entrar activas o seguirían sin aparecer. */
+function sincronizarAreasActivas(activarTodas) {
+  var existentes = TUTOR.AREAS.map(function (a) { return a.id; });
+  var activas = activarTodas ? existentes.slice() : Estado.areasActivas().filter(function (id) {
+    return existentes.indexOf(id) >= 0;
+  });
+  if (!activas.length) activas = existentes.slice();
+  Estado.guardarAjustes({ areasActivas: activas });
+}
+
+/* El plan guarda identificadores de tema. Al cambiar el temario
+   hay que rehacerlo, o quedarían bloques apuntando a temas que
+   ya no existen: huecos silenciosos en la semana. */
+function rehacerPlanTrasCambioDeTemario() {
+  if (TUTOR.TEMAS.length) Estado.generarPlan(14);
+  else Estado.guardarAjustes({});   // solo persistir
+}
+
+UI.accion('temario-base', function (d) {
+  var quitar = d.valor === '0';
+  if (!quitar) {
+    TUTOR.restaurarBase();
+    Estado.guardarAjustes({ temarioBase: true });
+    /* Al devolver el temario, sus áreas entran activas: si no,
+       volverían pausadas y parecería que no ha vuelto nada. */
+    sincronizarAreasActivas(true);
+    rehacerPlanTrasCambioDeTemario();
+    UI.refrescar();
+    UI.brindis('Temario de fisiología devuelto');
+    return;
+  }
+
+  UI.modal('<h3>Quitar el temario de fisiología</h3>' +
+    '<p>Desaparecerán las 5 áreas de fábrica, sus 32 temas, sus 252 tarjetas y sus 63 ' +
+    'preguntas. La app queda vacía y lista para la materia que quieras.</p>' +
+    '<p class="sm tenue">No se borra nada del código: es reversible desde este mismo sitio. ' +
+    'Tu progreso sobre esos temas se conserva por si los devuelves, y tu contenido propio ' +
+    'no se toca.</p>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-acento" data-accion="confirmar-quitar-base">Quitar el temario</button></div>');
+});
+
+UI.accion('confirmar-quitar-base', function () {
+  TUTOR.quitarBase();
+  Estado.guardarAjustes({ temarioBase: false });
+  sincronizarAreasActivas();
+  rehacerPlanTrasCambioDeTemario();
+  UI.cerrarModal();
+  UI.ir('temario');
+  UI.brindis(TUTOR.TEMAS.length
+    ? 'Temario de fábrica quitado · queda tu contenido'
+    : 'Temario vacío · crea tu primer tema en el Taller');
+});
+
+UI.accion('empezar-de-cero', function () {
+  UI.modal('<h3>Empezar de cero</h3>' +
+    '<p>Esto deja la app <b>completamente vacía</b>: se borra tu progreso, tus notas, ' +
+    'tus fuentes, tu historial de exámenes y el contenido que hayas creado, y se quita ' +
+    'el temario de fisiología.</p>' +
+    '<div class="aviso aviso-acento">No se puede deshacer. Si hay algo que quieras ' +
+    'conservar, cancela y usa antes <b>Exportar progreso</b>.</div>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn" data-accion="exportar">Exportar primero</button>' +
+    '<button class="btn btn-acento" data-accion="confirmar-cero">Sí, empezar de cero</button></div>');
+});
+
+UI.accion('confirmar-cero', function () {
+  /* Orden importante: primero se apartan los temas de fábrica del
+     registro, y después se reinicia el estado con el ajuste ya
+     puesto, para que al recargar no vuelvan a aparecer. */
+  TUTOR.quitarBase();
+  Estado.reiniciar();
+  Estado.guardarAjustes({ temarioBase: false, areasActivas: [] });
+  UI.cerrarModal();
+  UI.ir('taller');
+  UI.brindis('Todo vacío · empieza creando un tema en el Taller');
 });
 
 /* --- base de datos en Sheets --- */
@@ -11452,6 +11669,7 @@ UI.accion('minerva-accion', function (d) {
   if (real === 'ir-tarjetas') { Mazo.cargar(null); UI.ir('tarjetas'); return; }
   if (real === 'arranque-rapido') {
     var s = Estado.sugerencia();
+    if (!s) { UI.brindis('No hay ningún tema todavía. Créalo en el Taller.'); return; }
     var min = parseInt(datos.min, 10) || 20;
     Sesion.iniciar(s.tema, min <= 10 ? 'repaso' : min <= 30 ? 'comprender' : 'intensivo', min);
     return;
@@ -12057,9 +12275,14 @@ UI.accion('cerrar-modal', function () { UI.cerrarModal(); });
 function arrancar() {
   Estado.iniciar().then(function () {
     UI.aplicarTema(Estado.ajustes().tema);
+    /* Se guarda copia del temario de fábrica ANTES de incorporar
+       lo propio, para poder distinguir uno de otro después. */
+    TUTOR.congelarBase();
     /* El contenido creado en el Taller vive en el estado guardado:
        se reincorpora al temario antes de pintar nada. */
     Taller.registrarGuardado();
+    if (Estado.ajustes().temarioBase === false) TUTOR.quitarBase();
+    sincronizarAreasActivas();
     pintarNavegacion();
 
     // Genera un plan inicial la primera vez.

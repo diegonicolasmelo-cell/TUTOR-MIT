@@ -45,6 +45,25 @@ programa solo.
 El reparto del tiempo entre fases lo decide el **modo** elegido (comprender, repaso rápido,
 modo examen, tutor intensivo, profundización), definido en `assets/datos-nucleo.js`.
 
+## Usarla para otra materia
+
+El motor no sabe de medicina. Las seis fases, la repetición espaciada, el intercalado y el
+detector de brechas sirven igual para cualquier materia que se estudie **comprendiendo y
+recordando**. Los 32 temas de fisiología vienen porque una app vacía no se puede probar, no
+porque el diseño dependa de ellos.
+
+Eso plantea un problema que no es obvio: **el temario de fábrica está en el código, no en tus
+datos**, así que «borrar el progreso» no lo hacía desaparecer. Volvía en cada arranque.
+
+En `Ajustes → Usar la app para otra materia` hay un interruptor que lo aparta del registro en
+memoria. Es reversible —los temas siguen en el paquete y vuelven cuando quieras, con tu
+progreso sobre ellos intacto— y no requiere tocar un solo archivo. Debajo, `Empezar de cero
+del todo` deja además el progreso, las notas, las fuentes y el historial vacíos.
+
+Quitar el temario obliga a que la app **funcione con cero temas**, que es un estado legítimo y
+no un error: el panel de inicio lo dice y te manda al Taller, el plan se rehace, y las áreas
+activas se recalculan para no apuntar a áreas que ya no existen.
+
 ## Contenido
 
 **32 temas · 11 módulos · 5 áreas · 252 tarjetas · 63 preguntas de alternativa.**

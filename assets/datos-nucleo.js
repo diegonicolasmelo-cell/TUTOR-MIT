@@ -263,9 +263,80 @@ TUTOR.NIVELES = {
    Pensados para el perfil de Diego: profesional de UCI, familia,
    poco tiempo, bases sólidas y pacientes reales a mano.
    ------------------------------------------------------------ */
+/* ------------------------------------------------------------
+   TEMARIO DE FÁBRICA: QUITARLO Y DEVOLVERLO
+   ------------------------------------------------------------
+   Los 32 temas de fisiología no están en los datos del usuario:
+   están en el código, en los archivos datos-*.js. Por eso
+   «Reiniciar todo» no los hacía desaparecer, y quien quiera usar
+   la app para otra materia se los encontraba de vuelta en cada
+   arranque.
+
+   La solución no es borrar archivos —eso sería tocar código, no
+   usar la app— sino apartarlos del registro en memoria. Se
+   guarda una copia al arrancar, antes de incorporar el contenido
+   propio, de modo que la decisión es reversible: si mañana los
+   quiere de vuelta, siguen intactos en el paquete.
+   ------------------------------------------------------------ */
+TUTOR.BASE = null;
+
+TUTOR.congelarBase = function () {
+  if (TUTOR.BASE) return;          /* solo la primera vez */
+  TUTOR.BASE = {
+    areas: TUTOR.AREAS.slice(),
+    modulos: TUTOR.MODULOS.slice(),
+    temas: TUTOR.TEMAS.slice(),
+    mcq: JSON.parse(JSON.stringify(TUTOR.MCQ || {}))
+  };
+};
+
+/* Qué es «de fábrica» se decide por la copia congelada, no por
+   la marca «propio» de cada objeto. Es más fiable: la marca
+   depende de que el importador la ponga bien en las tres
+   entidades, y el contenido que ya esté guardado de antes no se
+   puede corregir a posteriori. La copia, en cambio, es por
+   definición exactamente lo que traía la app. */
+function enBase_(lista, x) {
+  for (var i = 0; i < lista.length; i++) if (lista[i].id === x.id) return true;
+  return false;
+}
+
+TUTOR.hayBase = function () {
+  if (!TUTOR.BASE) return true;
+  return TUTOR.TEMAS.some(function (t) { return enBase_(TUTOR.BASE.temas, t); });
+};
+
+TUTOR.quitarBase = function () {
+  if (!TUTOR.BASE) return;
+  var b = TUTOR.BASE;
+  TUTOR.AREAS = TUTOR.AREAS.filter(function (a) { return !enBase_(b.areas, a); });
+  TUTOR.MODULOS = TUTOR.MODULOS.filter(function (m) { return !enBase_(b.modulos, m); });
+  TUTOR.TEMAS = TUTOR.TEMAS.filter(function (t) { return !enBase_(b.temas, t); });
+  /* Las alternativas de fábrica se registran aparte, en un mapa
+     por tema: hay que retirarlas también o el examen seguiría
+     preguntando por temas que ya no existen. */
+  var vivos = {};
+  TUTOR.TEMAS.forEach(function (t) { vivos[t.id] = true; });
+  Object.keys(TUTOR.MCQ).forEach(function (id) {
+    if (!vivos[id]) delete TUTOR.MCQ[id];
+  });
+};
+
+TUTOR.restaurarBase = function () {
+  if (!TUTOR.BASE) return;
+  var b = TUTOR.BASE;
+  b.areas.forEach(function (a) { if (!TUTOR.area(a.id)) TUTOR.AREAS.push(a); });
+  b.modulos.forEach(function (m) { if (!TUTOR.modulo(m.id)) TUTOR.MODULOS.push(m); });
+  b.temas.forEach(function (t) { if (!TUTOR.tema(t.id)) TUTOR.TEMAS.push(t); });
+  Object.keys(b.mcq).forEach(function (id) {
+    if (!TUTOR.MCQ[id]) TUTOR.MCQ[id] = b.mcq[id];
+  });
+};
+
 TUTOR.AJUSTES_DEFECTO = {
   nombre: 'Diego',
   tema: 'auto',
+  temarioBase: true,
   areasActivas: TUTOR.AREAS.map(function (a) { return a.id; }),
   asistente: true,
   minutosPorDia: { 0: 30, 1: 25, 2: 25, 3: 25, 4: 25, 5: 20, 6: 45 }, // 0 = domingo

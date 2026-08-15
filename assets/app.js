@@ -166,12 +166,14 @@ UI.accion('ir-tarjetas', function () {
 /* --- arranque de sesiones --- */
 UI.accion('empezar-sugerido', function () {
   var s = Estado.sugerencia();
+  if (!s) { UI.brindis('No hay ningún tema todavía. Créalo en el Taller.'); return; }
   UI.ir('preparar', { tema: s.tema });
 });
 
 UI.accion('arranque-rapido', function (d) {
   var min = parseInt(d.min, 10);
   var s = Estado.sugerencia();
+  if (!s) { UI.brindis('No hay ningún tema todavía. Créalo en el Taller.'); return; }
   var modo = min <= 10 ? 'repaso' : min <= 20 ? 'comprender' : min <= 30 ? 'comprender' : min <= 45 ? 'intensivo' : 'profundizar';
   Sesion.iniciar(s.tema, modo, min);
 });
@@ -284,6 +286,91 @@ UI.accion('guardar-srs', function () {
   });
   UI.actualizarGlobos();
   UI.brindis('Preferencias de repaso guardadas');
+});
+
+/* ------------------------------------------------------------
+   EMPEZAR DE CERO
+   ------------------------------------------------------------ */
+
+/* Si se quita el temario de fábrica, las áreas activas guardadas
+   apuntarían a áreas que ya no existen y la app se vería vacía
+   sin explicar por qué. Y al revés: al devolverlo, las áreas
+   recuperadas deben entrar activas o seguirían sin aparecer. */
+function sincronizarAreasActivas(activarTodas) {
+  var existentes = TUTOR.AREAS.map(function (a) { return a.id; });
+  var activas = activarTodas ? existentes.slice() : Estado.areasActivas().filter(function (id) {
+    return existentes.indexOf(id) >= 0;
+  });
+  if (!activas.length) activas = existentes.slice();
+  Estado.guardarAjustes({ areasActivas: activas });
+}
+
+/* El plan guarda identificadores de tema. Al cambiar el temario
+   hay que rehacerlo, o quedarían bloques apuntando a temas que
+   ya no existen: huecos silenciosos en la semana. */
+function rehacerPlanTrasCambioDeTemario() {
+  if (TUTOR.TEMAS.length) Estado.generarPlan(14);
+  else Estado.guardarAjustes({});   // solo persistir
+}
+
+UI.accion('temario-base', function (d) {
+  var quitar = d.valor === '0';
+  if (!quitar) {
+    TUTOR.restaurarBase();
+    Estado.guardarAjustes({ temarioBase: true });
+    /* Al devolver el temario, sus áreas entran activas: si no,
+       volverían pausadas y parecería que no ha vuelto nada. */
+    sincronizarAreasActivas(true);
+    rehacerPlanTrasCambioDeTemario();
+    UI.refrescar();
+    UI.brindis('Temario de fisiología devuelto');
+    return;
+  }
+
+  UI.modal('<h3>Quitar el temario de fisiología</h3>' +
+    '<p>Desaparecerán las 5 áreas de fábrica, sus 32 temas, sus 252 tarjetas y sus 63 ' +
+    'preguntas. La app queda vacía y lista para la materia que quieras.</p>' +
+    '<p class="sm tenue">No se borra nada del código: es reversible desde este mismo sitio. ' +
+    'Tu progreso sobre esos temas se conserva por si los devuelves, y tu contenido propio ' +
+    'no se toca.</p>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-acento" data-accion="confirmar-quitar-base">Quitar el temario</button></div>');
+});
+
+UI.accion('confirmar-quitar-base', function () {
+  TUTOR.quitarBase();
+  Estado.guardarAjustes({ temarioBase: false });
+  sincronizarAreasActivas();
+  rehacerPlanTrasCambioDeTemario();
+  UI.cerrarModal();
+  UI.ir('temario');
+  UI.brindis(TUTOR.TEMAS.length
+    ? 'Temario de fábrica quitado · queda tu contenido'
+    : 'Temario vacío · crea tu primer tema en el Taller');
+});
+
+UI.accion('empezar-de-cero', function () {
+  UI.modal('<h3>Empezar de cero</h3>' +
+    '<p>Esto deja la app <b>completamente vacía</b>: se borra tu progreso, tus notas, ' +
+    'tus fuentes, tu historial de exámenes y el contenido que hayas creado, y se quita ' +
+    'el temario de fisiología.</p>' +
+    '<div class="aviso aviso-acento">No se puede deshacer. Si hay algo que quieras ' +
+    'conservar, cancela y usa antes <b>Exportar progreso</b>.</div>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn" data-accion="exportar">Exportar primero</button>' +
+    '<button class="btn btn-acento" data-accion="confirmar-cero">Sí, empezar de cero</button></div>');
+});
+
+UI.accion('confirmar-cero', function () {
+  /* Orden importante: primero se apartan los temas de fábrica del
+     registro, y después se reinicia el estado con el ajuste ya
+     puesto, para que al recargar no vuelvan a aparecer. */
+  TUTOR.quitarBase();
+  Estado.reiniciar();
+  Estado.guardarAjustes({ temarioBase: false, areasActivas: [] });
+  UI.cerrarModal();
+  UI.ir('taller');
+  UI.brindis('Todo vacío · empieza creando un tema en el Taller');
 });
 
 /* --- base de datos en Sheets --- */
@@ -447,6 +534,7 @@ UI.accion('minerva-accion', function (d) {
   if (real === 'ir-tarjetas') { Mazo.cargar(null); UI.ir('tarjetas'); return; }
   if (real === 'arranque-rapido') {
     var s = Estado.sugerencia();
+    if (!s) { UI.brindis('No hay ningún tema todavía. Créalo en el Taller.'); return; }
     var min = parseInt(datos.min, 10) || 20;
     Sesion.iniciar(s.tema, min <= 10 ? 'repaso' : min <= 30 ? 'comprender' : 'intensivo', min);
     return;
@@ -1052,9 +1140,14 @@ UI.accion('cerrar-modal', function () { UI.cerrarModal(); });
 function arrancar() {
   Estado.iniciar().then(function () {
     UI.aplicarTema(Estado.ajustes().tema);
+    /* Se guarda copia del temario de fábrica ANTES de incorporar
+       lo propio, para poder distinguir uno de otro después. */
+    TUTOR.congelarBase();
     /* El contenido creado en el Taller vive en el estado guardado:
        se reincorpora al temario antes de pintar nada. */
     Taller.registrarGuardado();
+    if (Estado.ajustes().temarioBase === false) TUTOR.quitarBase();
+    sincronizarAreasActivas();
     pintarNavegacion();
 
     // Genera un plan inicial la primera vez.

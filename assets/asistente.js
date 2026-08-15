@@ -266,7 +266,8 @@ var Minerva = (function () {
       var d = Estado.datos();
       if (d.sesiones.length > 0) return null;
       var s = Estado.sugerencia();
-      var t = TUTOR.tema(s.tema);
+      var t = s ? TUTOR.tema(s.tema) : null;
+      if (!t) return null;
       return {
         id: 'primera',
         prioridad: 100,

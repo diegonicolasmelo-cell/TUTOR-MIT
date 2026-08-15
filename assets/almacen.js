@@ -523,7 +523,11 @@ var Estado = (function () {
     sugerencia: function () {
       var hoy = hoyISO();
       var bloques = Estado.planDe(hoy).filter(function (b) {
-        return !b.hecho && b.tipo === 'estudio';
+        /* El plan se guarda con identificadores de tema. Si el
+           temario cambió —al quitar el de fábrica, por ejemplo—
+           quedan bloques apuntando a temas que ya no existen, y
+           sugerirlos daría un tema nulo. */
+        return !b.hecho && b.tipo === 'estudio' && !!TUTOR.tema(b.tema);
       });
       if (bloques.length) {
         return { tema: bloques[0].tema, minutos: bloques[0].minutos, origen: 'plan' };
@@ -533,6 +537,10 @@ var Estado = (function () {
         return Estado.dominio(a.id) - Estado.dominio(b.id);
       });
       if (!candidatos.length) candidatos = TUTOR.TEMAS.slice();
+      /* Sin ningún tema no hay nada que sugerir. Ocurre de verdad:
+         al quitar el temario de fábrica para usar la app con otra
+         materia, el temario queda vacío hasta el primer import. */
+      if (!candidatos.length) return null;
       return {
         tema: candidatos[0].id,
         minutos: Math.min(Estado.minutosDisponibles(hoy) || 25, 30),

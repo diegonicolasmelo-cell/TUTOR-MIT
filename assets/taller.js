@@ -359,7 +359,7 @@ var Taller = (function () {
         icono: limpiarTexto(datos.area.icono).slice(0, 4) || '📗',
         resumen: limpiarTexto(datos.area.resumen) || 'Área creada desde el Taller.',
         lema: limpiarTexto(datos.area.lema) || '',
-        propia: true
+        propio: true
       };
       if (!datos.area.nombre) avisos.push('El área no traía nombre: se usó el identificador.');
     }

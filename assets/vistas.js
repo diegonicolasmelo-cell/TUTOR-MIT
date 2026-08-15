@@ -13,10 +13,14 @@ UI.registrar('inicio', {
   },
   sub: function () {
     var s = Estado.sugerencia();
-    var t = TUTOR.tema(s.tema);
+    var t = s ? TUTOR.tema(s.tema) : null;
+    if (!t) return 'Sin temario todavía · créalo en el Taller';
     return 'Siguiente paso sugerido: <b>' + UI.esc(t.nombre) + '</b> · ' + s.minutos + ' min';
   },
   acciones: function () {
+    if (!Estado.sugerencia()) {
+      return '<button class="btn btn-primario" data-accion="navegar" data-ruta="taller">Crear contenido</button>';
+    }
     return '<button class="btn btn-primario" data-accion="empezar-sugerido">▶ Empezar sesión</button>';
   },
 
@@ -29,9 +33,25 @@ UI.registrar('inicio', {
     var racha = Estado.datos().racha;
     var brechas = Estado.brechasAbiertas();
     var s = Estado.sugerencia();
-    var temaSug = TUTOR.tema(s.tema);
+    var temaSug = s ? TUTOR.tema(s.tema) : null;
 
     var html = '';
+
+    /* La app vacía es un estado legítimo, no un error: se llega a
+       él a propósito al quitar el temario para usar otra materia.
+       Conviene decir qué hacer, no dejar un panel en blanco. */
+    if (!TUTOR.TEMAS.length) {
+      return '<div class="tarjeta"><div class="tarjeta-cab"><h3>Temario vacío</h3></div>' +
+        '<p>No hay ningún tema todavía. Es lo esperable si acabas de quitar el temario ' +
+        'de fisiología para usar la app con otra materia.</p>' +
+        '<p class="sm tenue">El <b>Taller</b> crea temas a partir de tus propios apuntes y ' +
+        'papers: defines qué quieres, te da un prompt, y lo que te devuelva la IA se valida ' +
+        'antes de entrar. Si prefieres el temario de fisiología de vuelta, está en Ajustes.</p>' +
+        '<div class="linea mt">' +
+        '<button class="btn btn-primario" data-accion="navegar" data-ruta="taller">Ir al Taller</button>' +
+        '<button class="btn btn-fantasma" data-accion="navegar" data-ruta="ajustes">Ajustes</button>' +
+        '</div></div>';
+    }
 
     /* --- consejo principal de Minerva --- */
     var consejo = (Estado.ajustes().asistente && typeof Minerva !== 'undefined') ? Minerva.principal() : null;
@@ -72,9 +92,11 @@ UI.registrar('inicio', {
           m + ' min<small>' + descripcionTiempo(m) + '</small></button>';
       }).join('') +
       '</div>' +
-      '<div class="aviso"><b>Sugerido ahora:</b> ' + UI.esc(temaSug.nombre) +
-      (temaSug.alto ? ' <span class="etiq etiq-fuego">🔥 Alto rendimiento</span>' : '') +
-      ' — ' + (s.origen === 'plan' ? 'viene de tu plan de la semana' : 'menor dominio con mayor rentabilidad') + '.</div>' +
+      (temaSug
+        ? '<div class="aviso"><b>Sugerido ahora:</b> ' + UI.esc(temaSug.nombre) +
+          (temaSug.alto ? ' <span class="etiq etiq-fuego">🔥 Alto rendimiento</span>' : '') +
+          ' — ' + (s.origen === 'plan' ? 'viene de tu plan de la semana' : 'menor dominio con mayor rentabilidad') + '.</div>'
+        : '<div class="aviso">Todas las áreas están pausadas. Actívalas en <b>Áreas</b> para que la app pueda sugerirte algo.</div>') +
       '</div>';
 
     /* --- dos columnas --- */
@@ -704,7 +726,30 @@ UI.registrar('ajustes', {
       '<div class="linea">' +
       '<button class="btn" data-accion="exportar">Exportar progreso</button>' +
       '<button class="btn" data-accion="importar">Importar</button>' +
-      '<button class="btn btn-acento" data-accion="reiniciar">Reiniciar todo</button>' +
+      '<button class="btn btn-acento" data-accion="reiniciar">Borrar mi progreso</button>' +
+      '</div>' +
+      '<p class="sm tenue mt"><b>Borrar mi progreso</b> vacía tu historial y tu contenido propio, ' +
+      'pero el temario de fisiología vuelve a aparecer: no está en tus datos, está en el código ' +
+      'de la app. Para quitarlo, usa lo de abajo.</p></div>';
+
+    /* --- cambiar de materia --- */
+    var base = TUTOR.hayBase();
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Usar la app para otra materia</h3>' +
+      '<div class="der"><span class="etiq' + (base ? '' : ' etiq-alerta') + '">' +
+      TUTOR.TEMAS.length + ' temas ahora</span></div></div>' +
+      '<p class="sm tenue">La app viene con 32 temas de fisiología porque hay que venir con algo, ' +
+      'pero el motor no sabe de medicina: sirve igual para cualquier materia que se estudie ' +
+      'comprendiendo y recordando. Si vas a usarla para otra cosa, quita el temario de fábrica ' +
+      'y crea el tuyo en el Taller.</p>' +
+      '<label class="campo"><span>Temario de fisiología</span>' +
+      '<div class="conmutador" style="display:inline-flex">' +
+      '<button data-accion="temario-base" data-valor="1" class="' + (base ? 'sel' : '') + '">Incluido</button>' +
+      '<button data-accion="temario-base" data-valor="0" class="' + (!base ? 'sel' : '') + '">Quitado</button>' +
+      '</div>' +
+      '<span class="sm tenue">Reversible: los temas siguen en el paquete de la app y vuelven ' +
+      'cuando quieras, con tu progreso sobre ellos intacto.</span></label>' +
+      '<div class="linea mt fin">' +
+      '<button class="btn btn-acento" data-accion="empezar-de-cero">Empezar de cero del todo</button>' +
       '</div></div>';
 
     return html;

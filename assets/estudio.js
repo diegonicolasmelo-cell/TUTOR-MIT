@@ -453,8 +453,13 @@ UI.registrar('preparar', {
   sub: 'Tres preguntas antes de empezar, como haría un tutor',
   angosto: true,
   render: function (p) {
-    var temaSel = p.tema || Estado.sugerencia().tema;
-    var t = TUTOR.tema(temaSel);
+    var sug = Estado.sugerencia();
+    var temaSel = p.tema || (sug ? sug.tema : null);
+    var t = temaSel ? TUTOR.tema(temaSel) : null;
+    if (!t) {
+      return '<div class="vacio"><span class="emoji">🦉</span>No hay ningún tema que estudiar.<br>' +
+        '<span class="sm">Créalo en el Taller o devuelve el temario de fisiología desde Ajustes.</span></div>';
+    }
 
     var html = '<div class="tarjeta"><div class="tarjeta-cab"><h3>1 · ¿Qué tema?</h3></div>' +
       '<select id="s-tema">' +
