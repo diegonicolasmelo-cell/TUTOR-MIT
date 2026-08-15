@@ -80,6 +80,42 @@ inicio» la deja como si fuera una app nativa.
 
 ---
 
+### 2.5 Si sale «Función de script no encontrada: doGet»
+
+Es el tropiezo más habitual, y el mensaje engaña: casi nunca significa que falte `doGet`.
+
+**La prueba que lo decide** (10 segundos): abre el editor del proyecto y mira el desplegable de
+funciones, arriba, junto al botón ▶ Ejecutar.
+
+| ¿Aparece `doGet` en la lista? | Qué pasa | Cómo se arregla |
+|---|---|---|
+| **No** | El código no está cargado | Ver causas 1 y 2 |
+| **Sí** | El código está bien; la implementación es vieja | Ver causa 3 |
+
+**Causa 1 — `Codigo.gs` se creó como archivo HTML.** Al pulsar «+» en el editor, Apps Script
+pregunta si quieres «Secuencia de comandos» o «HTML». Solo los archivos de script contienen
+funciones; si el código quedó dentro de un HTML, es texto inerte. `Codigo.gs` y `BaseDatos.gs`
+tienen que ser **Secuencia de comandos**; `Index`, `Estilos`, `Datos` y `App`, **HTML**.
+
+**Causa 2 — algún `.gs` tiene un error de sintaxis.** Aquí está lo traicionero: Apps Script
+junta todos los archivos de script en un mismo ámbito, así que **un error en cualquiera impide
+cargar todos**, y el síntoma es que «no encuentra doGet» aunque doGet esté perfecto. Suele
+pasar al pegar un archivo a medias. Comprobación: si el editor muestra un subrayado rojo en
+cualquier `.gs`, ese es el problema, no `doGet`.
+
+**Causa 3 — la implementación apunta a una versión anterior.** Es la más común cuando el
+desplegable **sí** muestra `doGet`. Una implementación queda congelada en la versión que
+existía al crearla: si desplegaste antes de terminar de pegar los archivos, la URL sigue
+sirviendo aquel proyecto vacío. No basta con guardar.
+
+> **Implementar → Gestionar implementaciones → ✏️ (editar) → Versión: «Nueva versión» →
+> Implementar.**
+>
+> La URL no cambia. Guardar con `Ctrl+S` **no** actualiza lo que sirve la URL; hay que crear
+> versión nueva cada vez que quieras que los cambios lleguen a la app publicada.
+
+---
+
 ## 3. Qué cambia al migrar
 
 **El progreso pasa a la cuenta de Google.** Deja de vivir en un navegador concreto: se
