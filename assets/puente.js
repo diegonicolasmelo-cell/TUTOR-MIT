@@ -77,6 +77,14 @@ var Puente = (function () {
     bdOlvidar: function () { return llamar('olvidarBaseDeDatos'); },
     bdVolcar: function (seccion, filas) { return llamar('volcarSeccion', seccion, filas); },
     bdFinalizar: function (meta) { return llamar('finalizarVolcado', meta); },
-    bdLeerContenido: function () { return llamar('leerContenidoBD'); }
+    bdLeerContenido: function () { return llamar('leerContenidoBD'); },
+
+    /* --- Google Calendar y recordatorio diario --- */
+    planACalendario: function (planResuelto, hora) {
+      return llamar('volcarPlanACalendario', planResuelto, hora);
+    },
+    recordatorio: function () { return llamar('estadoRecordatorio'); },
+    activarRecordatorio: function (hora) { return llamar('activarRecordatorio', hora); },
+    desactivarRecordatorio: function () { return llamar('desactivarRecordatorio'); }
   };
 })();

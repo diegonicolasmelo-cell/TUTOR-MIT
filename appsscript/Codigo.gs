@@ -415,41 +415,137 @@ function obtenerHojaRegistro_() {
 }
 
 /* ------------------------------------------------------------
-   OPCIONAL — Volcado del plan a Google Calendar
-   Convierte los bloques del plan en eventos reales, de modo
-   que el estudio ocupe un hueco en la agenda como cualquier
-   otro compromiso.
+   VOLCADO DEL PLAN A GOOGLE CALENDAR
+   ------------------------------------------------------------
+   Convierte los bloques del plan en eventos reales, de modo que
+   el estudio ocupe un hueco en la agenda como cualquier otro
+   compromiso. Para un horario de turnos es la diferencia entre
+   cumplir el plan y no cumplirlo.
+
+   El cliente manda los bloques YA RESUELTOS ({titulo, minutos}
+   por fecha): los identificadores de tema viven en su paquete,
+   no aquí, así que resolver nombres del lado servidor era
+   imposible — la versión anterior habría puesto el id crudo en
+   el título del evento.
+
+   Los eventos se marcan con una etiqueta en la descripción, y
+   ANTES de crear se borran los que la lleven en el rango de
+   fechas. Sin eso, pulsar el botón dos veces duplicaba toda la
+   semana; con eso, re-volcar tras regenerar el plan sustituye
+   los eventos viejos en vez de sumarlos.
    ------------------------------------------------------------ */
-function volcarPlanACalendario(plan, horaInicio) {
-  var calendario = CalendarApp.getDefaultCalendar();
-  var hora = horaInicio || 21;   // por defecto, 21:00
-  var creados = 0;
 
-  Object.keys(plan).forEach(function (fecha) {
-    var minutosAcumulados = 0;
-    plan[fecha].forEach(function (bloque) {
-      var partes = fecha.split('-');
-      var inicio = new Date(partes[0], partes[1] - 1, partes[2], hora, 0, 0);
-      inicio.setMinutes(inicio.getMinutes() + minutosAcumulados);
-      var fin = new Date(inicio.getTime() + bloque.minutos * 60000);
+var MARCA_EVENTO = '[tutor-mit-plan]';
 
-      var titulo = bloque.tipo === 'repaso'
-        ? '🔁 Tarjetas · repaso espaciado'
-        : '🫀 Estudio · ' + (bloque.tituloTema || bloque.tema);
+function volcarPlanACalendario(planResuelto, horaInicio) {
+  try {
+    var calendario = CalendarApp.getDefaultCalendar();
+    var hora = parseInt(horaInicio, 10);
+    if (isNaN(hora) || hora < 0 || hora > 23) hora = 21;
 
-      calendario.createEvent(titulo, inicio, fin, {
-        description: 'Tutor MIT — Cardiovascular\nBloque generado automáticamente por tu plan de estudio.'
-      });
-      minutosAcumulados += bloque.minutos;
-      creados++;
+    var fechas = Object.keys(planResuelto || {}).sort();
+    if (!fechas.length) {
+      return { ok: false, error: 'No hay bloques pendientes que volcar. Genera el plan primero.' };
+    }
+
+    /* Retirar los eventos de un volcado anterior en el rango. */
+    var p0 = fechas[0].split('-');
+    var p1 = fechas[fechas.length - 1].split('-');
+    var desde = new Date(p0[0], p0[1] - 1, p0[2], 0, 0, 0);
+    var hasta = new Date(p1[0], p1[1] - 1, p1[2], 23, 59, 59);
+    var borrados = 0;
+    calendario.getEvents(desde, hasta).forEach(function (ev) {
+      if (String(ev.getDescription() || '').indexOf(MARCA_EVENTO) >= 0) {
+        ev.deleteEvent();
+        borrados++;
+      }
     });
-  });
-  return creados;
+
+    var creados = 0;
+    fechas.forEach(function (fecha) {
+      var acumulado = 0;
+      var partes = fecha.split('-');
+      (planResuelto[fecha] || []).forEach(function (bloque) {
+        var min = parseInt(bloque.minutos, 10) || 0;
+        if (min <= 0) return;
+        var inicio = new Date(partes[0], partes[1] - 1, partes[2], hora, 0, 0);
+        inicio.setMinutes(inicio.getMinutes() + acumulado);
+        var fin = new Date(inicio.getTime() + min * 60000);
+
+        calendario.createEvent(
+          '📚 ' + (bloque.titulo || 'Estudio'),
+          inicio, fin,
+          { description: 'Bloque de tu plan de estudio del Tutor MIT.\n' + MARCA_EVENTO }
+        );
+        acumulado += min;
+        creados++;
+      });
+    });
+
+    return { ok: true, creados: creados, borrados: borrados, dias: fechas.length };
+  } catch (e) {
+    return { ok: false, error: 'No se pudo escribir en el calendario: ' + (e.message || e) };
+  }
 }
 
 /* ------------------------------------------------------------
-   OPCIONAL — Recordatorio diario por correo
-   Crear un activador temporal diario que llame a esta función.
+   RECORDATORIO DIARIO POR CORREO
+   ------------------------------------------------------------
+   recordatorioDiario() envía los bloques pendientes del día.
+   Lo dispara un activador temporal, y ese activador se instala
+   y desinstala DESDE LA INTERFAZ con las funciones de abajo:
+   pedir al usuario que lo cree a mano en el panel del editor
+   rompería la regla de que todo se hace desde la app.
+
+   Nota honesta sobre la hora: Apps Script dispara los
+   activadores diarios dentro de una VENTANA de una hora
+   (atHour(7) = entre las 7 y las 8), no a un minuto exacto.
+   ------------------------------------------------------------ */
+
+var CLAVE_HORA_RECORDATORIO = 'TUTOR_MIT_RECORDATORIO_HORA';
+
+function triggersRecordatorio_() {
+  return ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === 'recordatorioDiario';
+  });
+}
+
+function estadoRecordatorio() {
+  try {
+    var activos = triggersRecordatorio_();
+    var hora = PropertiesService.getUserProperties().getProperty(CLAVE_HORA_RECORDATORIO);
+    return { ok: true, activo: activos.length > 0, hora: hora ? parseInt(hora, 10) : 7 };
+  } catch (e) {
+    return { ok: false, error: 'No pude consultar el recordatorio: ' + (e.message || e) };
+  }
+}
+
+function activarRecordatorio(hora) {
+  try {
+    var h = parseInt(hora, 10);
+    if (isNaN(h) || h < 0 || h > 23) h = 7;
+    /* Uno solo: activar dos veces no debe duplicar correos. */
+    triggersRecordatorio_().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+    ScriptApp.newTrigger('recordatorioDiario').timeBased().everyDays(1).atHour(h).create();
+    PropertiesService.getUserProperties().setProperty(CLAVE_HORA_RECORDATORIO, String(h));
+    return { ok: true, hora: h };
+  } catch (e) {
+    return { ok: false, error: 'No pude crear el recordatorio: ' + (e.message || e) };
+  }
+}
+
+function desactivarRecordatorio() {
+  try {
+    var activos = triggersRecordatorio_();
+    activos.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+    return { ok: true, habia: activos.length };
+  } catch (e) {
+    return { ok: false, error: 'No pude quitarlo: ' + (e.message || e) };
+  }
+}
+
+/* ------------------------------------------------------------
+   Cuerpo del recordatorio (lo llama el activador, no el cliente)
    ------------------------------------------------------------ */
 function recordatorioDiario() {
   var json = leerEstadoCompleto();

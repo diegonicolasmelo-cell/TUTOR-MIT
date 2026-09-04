@@ -1039,7 +1039,15 @@ var Puente = (function () {
     bdOlvidar: function () { return llamar('olvidarBaseDeDatos'); },
     bdVolcar: function (seccion, filas) { return llamar('volcarSeccion', seccion, filas); },
     bdFinalizar: function (meta) { return llamar('finalizarVolcado', meta); },
-    bdLeerContenido: function () { return llamar('leerContenidoBD'); }
+    bdLeerContenido: function () { return llamar('leerContenidoBD'); },
+
+    /* --- Google Calendar y recordatorio diario --- */
+    planACalendario: function (planResuelto, hora) {
+      return llamar('volcarPlanACalendario', planResuelto, hora);
+    },
+    recordatorio: function () { return llamar('estadoRecordatorio'); },
+    activarRecordatorio: function (hora) { return llamar('activarRecordatorio', hora); },
+    desactivarRecordatorio: function () { return llamar('desactivarRecordatorio'); }
   };
 })();
 
@@ -1828,7 +1836,8 @@ UI.registrar('plan', {
   titulo: 'Plan de estudio',
   sub: 'Dosificado según tus minutos disponibles cada día',
   acciones: function () {
-    return '<button class="btn btn-s" data-accion="editar-disponibilidad">Disponibilidad</button>' +
+    return '<button class="btn btn-s btn-fantasma" data-accion="plan-calendario">Al calendario</button>' +
+      '<button class="btn btn-s" data-accion="editar-disponibilidad">Disponibilidad</button>' +
       '<button class="btn btn-s btn-primario" data-accion="generar-plan">Regenerar</button>';
   },
   render: function () {
@@ -2113,6 +2122,29 @@ UI.registrar('ajustes', {
         '<input id="a-bd-url" class="crece" placeholder="…o pega el enlace de una hoja ya creada">' +
         '<button class="btn btn-s btn-fantasma" data-accion="bd-vincular">Vincular</button></div>' +
         '<div id="a-bd-estado"></div>';
+    }
+    html += '</div>';
+
+    /* --- recordatorio diario --- */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Recordatorio diario por correo</h3></div>' +
+      '<p class="sm tenue">Cada mañana, un correo con los bloques pendientes del día y el enlace ' +
+      'a la app. Para un horario de turnos, que el plan te busque a ti funciona mejor que ' +
+      'acordarse de buscarlo.</p>';
+    if (!Puente.disponible()) {
+      html += '<div class="aviso aviso-alerta">' + UI.esc(Puente.motivo) + '</div>';
+    } else {
+      html += '<div class="linea">' +
+        '<select id="a-rec-hora">' +
+        [5, 6, 7, 8, 9, 12, 15, 18, 20].map(function (h) {
+          return '<option value="' + h + '"' + (h === 7 ? ' selected' : '') + '>' +
+            'Hacia las ' + h + ':00</option>';
+        }).join('') + '</select>' +
+        '<button class="btn btn-primario" data-accion="rec-activar">Activar</button>' +
+        '<button class="btn btn-fantasma" data-accion="rec-desactivar">Desactivar</button>' +
+        '<button class="btn btn-s btn-fantasma" data-accion="rec-estado">Ver estado</button></div>' +
+        '<p class="sm tenue mt">La hora es aproximada: Google dispara estos avisos dentro de una ' +
+        'ventana de una hora, no a un minuto exacto.</p>' +
+        '<div id="a-rec-estado"></div>';
     }
     html += '</div>';
 
@@ -5301,6 +5333,105 @@ UI.accion('confirmar-cero', function () {
   UI.cerrarModal();
   UI.ir('taller');
   UI.brindis('Todo vacío · empieza creando un tema en el Taller');
+});
+
+/* ------------------------------------------------------------
+   PLAN → GOOGLE CALENDAR
+   ------------------------------------------------------------ */
+
+/* Los identificadores de tema solo significan algo aquí, en el
+   cliente: se resuelven a nombres ANTES de mandar el plan, y se
+   filtra lo pasado y lo ya hecho — volcar ayer no ayuda a nadie. */
+function planParaCalendario() {
+  var plan = Estado.plan();
+  var hoy = Estado.hoyISO();
+  var salida = {};
+  Object.keys(plan).sort().forEach(function (fecha) {
+    if (fecha < hoy) return;
+    var bloques = (plan[fecha] || []).filter(function (b) {
+      return !b.hecho && b.minutos > 0;
+    }).map(function (b) {
+      if (b.tipo === 'repaso') return { titulo: 'Repaso de tarjetas', minutos: b.minutos };
+      var t = TUTOR.tema(b.tema);
+      return { titulo: 'Estudio · ' + (t ? t.nombre : b.tema), minutos: b.minutos };
+    });
+    if (bloques.length) salida[fecha] = bloques;
+  });
+  return salida;
+}
+
+UI.accion('plan-calendario', function () {
+  if (!Puente.disponible()) { UI.brindis(Puente.motivo); return; }
+  var resuelto = planParaCalendario();
+  var dias = Object.keys(resuelto).length;
+  if (!dias) { UI.brindis('No hay bloques pendientes que volcar. Regenera el plan.'); return; }
+
+  var total = 0;
+  Object.keys(resuelto).forEach(function (f) {
+    resuelto[f].forEach(function (b) { total += b.minutos; });
+  });
+
+  UI.modal('<h3>Volcar el plan a Google Calendar</h3>' +
+    '<p>' + dias + (dias === 1 ? ' día' : ' días') + ' pendientes · ' + total + ' minutos en total. ' +
+    'Cada bloque será un evento real en tu calendario.</p>' +
+    '<label class="campo"><span>Hora de inicio de cada día</span>' +
+    '<select id="cal-hora">' +
+    [6, 7, 8, 14, 17, 19, 20, 21, 22].map(function (h) {
+      return '<option value="' + h + '"' + (h === 21 ? ' selected' : '') + '>' + h + ':00</option>';
+    }).join('') + '</select></label>' +
+    '<p class="sm tenue">Si ya habías volcado antes, los eventos anteriores del plan se ' +
+    'sustituyen: no se duplican.</p>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-primario" data-accion="plan-calendario-confirmar">Crear los eventos</button></div>');
+});
+
+UI.accion('plan-calendario-confirmar', function () {
+  var hora = parseInt((UI.$('#cal-hora') || {}).value, 10) || 21;
+  UI.cerrarModal();
+  UI.brindis('Escribiendo en tu calendario…');
+  Puente.planACalendario(planParaCalendario(), hora).then(function (r) {
+    if (!r.ok) { UI.brindis(r.error); return; }
+    UI.brindis(r.creados + (r.creados === 1 ? ' evento creado' : ' eventos creados') +
+      (r.borrados ? ' · ' + r.borrados + ' anteriores sustituidos' : ''));
+  });
+});
+
+/* ------------------------------------------------------------
+   RECORDATORIO DIARIO
+   ------------------------------------------------------------ */
+
+function pintarRec(html) {
+  var caja = UI.$('#a-rec-estado');
+  if (caja) caja.innerHTML = html;
+}
+
+UI.accion('rec-estado', function () {
+  pintarRec('<div class="sm tenue mt">Consultando…</div>');
+  Puente.recordatorio().then(function (r) {
+    if (!r.ok) { pintarRec('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarRec(r.activo
+      ? '<div class="aviso aviso-ok mt">Activo · llega hacia las ' + r.hora + ':00.</div>'
+      : '<div class="aviso mt">Desactivado. No se envía ningún correo.</div>');
+  });
+});
+
+UI.accion('rec-activar', function () {
+  var hora = parseInt((UI.$('#a-rec-hora') || {}).value, 10);
+  pintarRec('<div class="sm tenue mt">Activando…</div>');
+  Puente.activarRecordatorio(hora).then(function (r) {
+    if (!r.ok) { pintarRec('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarRec('<div class="aviso aviso-ok mt"><b>Activado.</b> Llegará cada día hacia las ' +
+      r.hora + ':00, solo cuando tengas bloques pendientes.</div>');
+    UI.brindis('Recordatorio activado');
+  });
+});
+
+UI.accion('rec-desactivar', function () {
+  Puente.desactivarRecordatorio().then(function (r) {
+    if (!r.ok) { pintarRec('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarRec('<div class="sm tenue mt">' + (r.habia ? 'Desactivado.' : 'No había ninguno activo.') + '</div>');
+    UI.brindis('Recordatorio desactivado');
+  });
 });
 
 /* --- base de datos en Sheets --- */

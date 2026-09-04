@@ -31,6 +31,7 @@ programa solo.
 | **Notas** | Notas atómicas enlazadas con `[[corchetes dobles]]`, retroenlaces automáticos y detección de notas huérfanas. Es la parte de «segundo cerebro»: no sirve para no olvidar, sirve para pensar. |
 | **Rendimiento** | Precisión, constancia, prioridad de repaso, historial de exámenes y registro histórico de brechas. |
 | **Taller** | Crea temas, áreas y preguntas de alternativa nuevas **desde tus propios apuntes y papers**, sin tocar código: la app genera el prompt con el esquema, NotebookLM lo responde leyendo tus fuentes, y pegas el JSON de vuelta. Valida, sanea, previsualiza e integra. |
+| **Calendario y recordatorio** | El plan se vuelca a Google Calendar como eventos reales (re-volcar sustituye, no duplica), y un correo diario te trae los bloques pendientes — el disparador se instala y desinstala desde la propia app. Solo en la versión de Apps Script. |
 | **Prompt IA** | Genera el protocolo del tutor en texto para NotebookLM, Claude o ChatGPT, personalizado con el área, el tema, el tiempo, las brechas registradas y las fuentes de referencia propias de esa materia. |
 
 ## Las seis fases de la sesión

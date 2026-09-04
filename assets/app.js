@@ -373,6 +373,105 @@ UI.accion('confirmar-cero', function () {
   UI.brindis('Todo vacío · empieza creando un tema en el Taller');
 });
 
+/* ------------------------------------------------------------
+   PLAN → GOOGLE CALENDAR
+   ------------------------------------------------------------ */
+
+/* Los identificadores de tema solo significan algo aquí, en el
+   cliente: se resuelven a nombres ANTES de mandar el plan, y se
+   filtra lo pasado y lo ya hecho — volcar ayer no ayuda a nadie. */
+function planParaCalendario() {
+  var plan = Estado.plan();
+  var hoy = Estado.hoyISO();
+  var salida = {};
+  Object.keys(plan).sort().forEach(function (fecha) {
+    if (fecha < hoy) return;
+    var bloques = (plan[fecha] || []).filter(function (b) {
+      return !b.hecho && b.minutos > 0;
+    }).map(function (b) {
+      if (b.tipo === 'repaso') return { titulo: 'Repaso de tarjetas', minutos: b.minutos };
+      var t = TUTOR.tema(b.tema);
+      return { titulo: 'Estudio · ' + (t ? t.nombre : b.tema), minutos: b.minutos };
+    });
+    if (bloques.length) salida[fecha] = bloques;
+  });
+  return salida;
+}
+
+UI.accion('plan-calendario', function () {
+  if (!Puente.disponible()) { UI.brindis(Puente.motivo); return; }
+  var resuelto = planParaCalendario();
+  var dias = Object.keys(resuelto).length;
+  if (!dias) { UI.brindis('No hay bloques pendientes que volcar. Regenera el plan.'); return; }
+
+  var total = 0;
+  Object.keys(resuelto).forEach(function (f) {
+    resuelto[f].forEach(function (b) { total += b.minutos; });
+  });
+
+  UI.modal('<h3>Volcar el plan a Google Calendar</h3>' +
+    '<p>' + dias + (dias === 1 ? ' día' : ' días') + ' pendientes · ' + total + ' minutos en total. ' +
+    'Cada bloque será un evento real en tu calendario.</p>' +
+    '<label class="campo"><span>Hora de inicio de cada día</span>' +
+    '<select id="cal-hora">' +
+    [6, 7, 8, 14, 17, 19, 20, 21, 22].map(function (h) {
+      return '<option value="' + h + '"' + (h === 21 ? ' selected' : '') + '>' + h + ':00</option>';
+    }).join('') + '</select></label>' +
+    '<p class="sm tenue">Si ya habías volcado antes, los eventos anteriores del plan se ' +
+    'sustituyen: no se duplican.</p>' +
+    '<div class="linea fin mt"><button class="btn btn-fantasma" data-accion="cerrar-modal">Cancelar</button>' +
+    '<button class="btn btn-primario" data-accion="plan-calendario-confirmar">Crear los eventos</button></div>');
+});
+
+UI.accion('plan-calendario-confirmar', function () {
+  var hora = parseInt((UI.$('#cal-hora') || {}).value, 10) || 21;
+  UI.cerrarModal();
+  UI.brindis('Escribiendo en tu calendario…');
+  Puente.planACalendario(planParaCalendario(), hora).then(function (r) {
+    if (!r.ok) { UI.brindis(r.error); return; }
+    UI.brindis(r.creados + (r.creados === 1 ? ' evento creado' : ' eventos creados') +
+      (r.borrados ? ' · ' + r.borrados + ' anteriores sustituidos' : ''));
+  });
+});
+
+/* ------------------------------------------------------------
+   RECORDATORIO DIARIO
+   ------------------------------------------------------------ */
+
+function pintarRec(html) {
+  var caja = UI.$('#a-rec-estado');
+  if (caja) caja.innerHTML = html;
+}
+
+UI.accion('rec-estado', function () {
+  pintarRec('<div class="sm tenue mt">Consultando…</div>');
+  Puente.recordatorio().then(function (r) {
+    if (!r.ok) { pintarRec('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarRec(r.activo
+      ? '<div class="aviso aviso-ok mt">Activo · llega hacia las ' + r.hora + ':00.</div>'
+      : '<div class="aviso mt">Desactivado. No se envía ningún correo.</div>');
+  });
+});
+
+UI.accion('rec-activar', function () {
+  var hora = parseInt((UI.$('#a-rec-hora') || {}).value, 10);
+  pintarRec('<div class="sm tenue mt">Activando…</div>');
+  Puente.activarRecordatorio(hora).then(function (r) {
+    if (!r.ok) { pintarRec('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarRec('<div class="aviso aviso-ok mt"><b>Activado.</b> Llegará cada día hacia las ' +
+      r.hora + ':00, solo cuando tengas bloques pendientes.</div>');
+    UI.brindis('Recordatorio activado');
+  });
+});
+
+UI.accion('rec-desactivar', function () {
+  Puente.desactivarRecordatorio().then(function (r) {
+    if (!r.ok) { pintarRec('<div class="aviso aviso-acento mt">' + UI.esc(r.error) + '</div>'); return; }
+    pintarRec('<div class="sm tenue mt">' + (r.habia ? 'Desactivado.' : 'No había ninguno activo.') + '</div>');
+    UI.brindis('Recordatorio desactivado');
+  });
+});
+
 /* --- base de datos en Sheets --- */
 function pintarBD(html) {
   var caja = UI.$('#a-bd-estado');

@@ -407,7 +407,8 @@ UI.registrar('plan', {
   titulo: 'Plan de estudio',
   sub: 'Dosificado según tus minutos disponibles cada día',
   acciones: function () {
-    return '<button class="btn btn-s" data-accion="editar-disponibilidad">Disponibilidad</button>' +
+    return '<button class="btn btn-s btn-fantasma" data-accion="plan-calendario">Al calendario</button>' +
+      '<button class="btn btn-s" data-accion="editar-disponibilidad">Disponibilidad</button>' +
       '<button class="btn btn-s btn-primario" data-accion="generar-plan">Regenerar</button>';
   },
   render: function () {
@@ -692,6 +693,29 @@ UI.registrar('ajustes', {
         '<input id="a-bd-url" class="crece" placeholder="…o pega el enlace de una hoja ya creada">' +
         '<button class="btn btn-s btn-fantasma" data-accion="bd-vincular">Vincular</button></div>' +
         '<div id="a-bd-estado"></div>';
+    }
+    html += '</div>';
+
+    /* --- recordatorio diario --- */
+    html += '<div class="tarjeta"><div class="tarjeta-cab"><h3>Recordatorio diario por correo</h3></div>' +
+      '<p class="sm tenue">Cada mañana, un correo con los bloques pendientes del día y el enlace ' +
+      'a la app. Para un horario de turnos, que el plan te busque a ti funciona mejor que ' +
+      'acordarse de buscarlo.</p>';
+    if (!Puente.disponible()) {
+      html += '<div class="aviso aviso-alerta">' + UI.esc(Puente.motivo) + '</div>';
+    } else {
+      html += '<div class="linea">' +
+        '<select id="a-rec-hora">' +
+        [5, 6, 7, 8, 9, 12, 15, 18, 20].map(function (h) {
+          return '<option value="' + h + '"' + (h === 7 ? ' selected' : '') + '>' +
+            'Hacia las ' + h + ':00</option>';
+        }).join('') + '</select>' +
+        '<button class="btn btn-primario" data-accion="rec-activar">Activar</button>' +
+        '<button class="btn btn-fantasma" data-accion="rec-desactivar">Desactivar</button>' +
+        '<button class="btn btn-s btn-fantasma" data-accion="rec-estado">Ver estado</button></div>' +
+        '<p class="sm tenue mt">La hora es aproximada: Google dispara estos avisos dentro de una ' +
+        'ventana de una hora, no a un minuto exacto.</p>' +
+        '<div id="a-rec-estado"></div>';
     }
     html += '</div>';
 

@@ -184,7 +184,9 @@ fs.writeFileSync(path.join(APPSSCRIPT, 'appsscript.json'),
       'https://www.googleapis.com/auth/documents.readonly',
       'https://www.googleapis.com/auth/drive.readonly',
       /* llamar a la API de Gemini desde UrlFetchApp */
-      'https://www.googleapis.com/auth/script.external_request'
+      'https://www.googleapis.com/auth/script.external_request',
+      /* instalar el recordatorio diario desde la interfaz */
+      'https://www.googleapis.com/auth/script.scriptapp'
     ]
   }, null, 2) + '\n');
 

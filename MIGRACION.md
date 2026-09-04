@@ -146,19 +146,27 @@ JSON). Después, en la versión de Apps Script: `Ajustes → Importar`.
 
 ## 4. Lo que se desbloquea con Apps Script
 
-`Codigo.gs` ya incluye estas funciones, listas para conectarse desde la interfaz:
+**`volcarPlanACalendario` — ya conectada.** En el Plan, el botón «Al calendario» convierte
+cada bloque pendiente en un evento real de Google Calendar, a la hora de inicio que elijas.
+El estudio deja de ser una intención y ocupa un hueco en la agenda como cualquier otro
+compromiso, que para un horario de turnos es la diferencia entre cumplir el plan y no
+cumplirlo. Dos decisiones de diseño:
 
-**`volcarPlanACalendario(plan, horaInicio)`** — convierte cada bloque del plan en un evento
-real de Google Calendar. El estudio deja de ser una intención y ocupa un hueco en la agenda
-como cualquier otro compromiso, que para un horario de turnos es la diferencia entre cumplir
-el plan y no cumplirlo.
+- **Re-volcar sustituye, no duplica.** Los eventos llevan una marca en la descripción y,
+  antes de crear, se borran los que la tengan en el rango de fechas. Tus otros eventos no se
+  tocan. Sin esto, pulsar el botón dos veces duplicaba la semana entera.
+- **Solo va lo pendiente y lo futuro**, con los nombres de tema ya resueltos por el cliente:
+  el servidor no conoce el temario, así que resolverlos allí era imposible.
 
-**`registrarSesionEnHoja(datos)`** — vuelca cada sesión a una hoja de cálculo (fecha, tema,
-modo, minutos, aciertos, porcentaje). Útil para hacer gráficos propios o llevar un registro
-al margen de la app.
+**`recordatorioDiario` — ya conectada, incluida la instalación del disparador.** En
+`Ajustes → Recordatorio diario por correo` se activa y desactiva sin pisar el editor de Apps
+Script: la app crea y borra el activador temporal por ti. Activar dos veces no duplica
+correos, y si el día no tiene bloques pendientes no se envía nada. La hora es aproximada:
+Google dispara estos avisos dentro de una ventana de una hora.
 
-**`recordatorioDiario()`** — envía por correo los bloques pendientes del día. Requiere crear
-un **activador temporal diario** desde el panel de activadores del proyecto.
+**`registrarSesionEnHoja(datos)` — existe pero se deja sin conectar, a propósito.** La base
+de datos en Sheets ya vuelca el historial completo de sesiones con una pulsación; un segundo
+registro paralelo de lo mismo acabaría discrepando del primero y no se sabría cuál creer.
 
 **`leerDocumento(referencia)` y `listarDocsRecientes()`** — ya conectadas. Permiten traer la
 respuesta de NotebookLM desde un Google Doc en lugar del portapapeles, eligiendo el documento
@@ -172,13 +180,9 @@ la app: el estado es exportable desde Ajustes y una clave dentro viajaría en cu
 > La creación del almacén y la **subida de documentos** se hacen en Google AI Studio, que ya
 > tiene interfaz para ello. La app solo lista los almacenes y consulta.
 
-Para usarlas desde el cliente basta con llamarlas igual que a las de almacenamiento:
-
-```js
-google.script.run
-  .withSuccessHandler(function (n) { UI.brindis(n + ' eventos creados'); })
-  .volcarPlanACalendario(Estado.plan(), 21);
-```
+> Los ámbitos del manifiesto crecieron para esto (`script.scriptapp`, para instalar el
+> activador desde la app): tras actualizar `appsscript.json` hay que **volver a autorizar**
+> el proyecto, igual que con Docs y Drive.
 
 ---
 
@@ -307,6 +311,10 @@ hacerlo las borraría y dejaría de responder nada.
       numéricas no se aplicaron y hay que revisar el formato de la hoja.
 - [ ] Vincular una hoja de cálculo cualquiera **falla** con un mensaje claro en vez de volcar
       encima.
+- [ ] `Plan → Al calendario` crea los eventos a la hora elegida, y volcarlo por segunda vez
+      **sustituye** los anteriores en vez de duplicarlos. Tus otros eventos no se tocan.
+- [ ] `Ajustes → Recordatorio diario` se activa, aparece como activador del proyecto, y al
+      desactivarlo desaparece. Activarlo dos veces deja **un solo** activador.
 
 ---
 
